@@ -73,8 +73,10 @@ makes the one-command Hostinger deploy below work.
 3. **Connect Git**: under the same section (or **Git** in hPanel), point it at this repository
    and branch, then deploy/pull.
 4. Set environment variables in the Node.js app's **Environment variables** panel (mirror
-   `.env.example`): `PORT` (Hostinger usually sets this for you), `DB_HOST` (use `localhost`
-   on the server itself), `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET`.
+   `.env.example`): `PORT` (Hostinger usually sets this for you), `DB_HOST` (use `127.0.0.1`,
+   **not** `localhost` — Node's MySQL driver resolves `localhost` over the network rather than
+   a Unix socket, and often picks the IPv6 loopback `::1` first, which the DB user's grant
+   doesn't cover), `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET`.
 5. Create a MySQL database in **hPanel → Databases → MySQL Databases** and use its
    host/user/password/name for the variables above.
 6. Click **NPM Install** in the Node.js app panel — this runs `npm install`, which triggers
