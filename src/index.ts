@@ -1,8 +1,11 @@
 import path from "path";
-import express from "express";
+import express, { ErrorRequestHandler } from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { healthRouter } from "./routes/health";
+import { authRouter } from "./routes/auth";
+import { usersRouter } from "./routes/users";
 
 dotenv.config();
 
@@ -10,16 +13,25 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const clientDistPath = path.join(__dirname, "../public");
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
 app.use("/api", healthRouter);
+app.use("/api/auth", authRouter);
+app.use("/api/users", usersRouter);
 
 app.use(express.static(clientDistPath));
 
 app.get(/^\/(?!api).*/, (_req, res) => {
   res.sendFile(path.join(clientDistPath, "index.html"));
 });
+
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ message: "Internal server error" });
+};
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);

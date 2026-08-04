@@ -28,3 +28,6 @@ Thumbs.db
 
 # Testing/coverage
 coverage/
+
+# TypeScript incremental build info
+*.tsbuildinfo
