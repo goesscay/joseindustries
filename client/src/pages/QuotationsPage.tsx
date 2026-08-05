@@ -9,6 +9,12 @@ export function QuotationsPage() {
       convertTargets={[
         { apiPath: "/proforma-invoices", routePath: "/proforma-invoices", title: "Proforma Invoice" },
         { apiPath: "/delivery-challans", routePath: "/delivery-challans", title: "Delivery Challan" },
+        {
+          apiPath: "/tax-invoices",
+          routePath: "/tax-invoices",
+          title: "Tax Invoice",
+          allowedRoles: ["super_admin", "admin"],
+        },
       ]}
     />
   );

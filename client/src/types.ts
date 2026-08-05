@@ -114,4 +114,29 @@ export interface SalesDocument {
   grand_total: string;
   created_at: string;
   updated_at: string;
+
+  /** Only present when the list/detail endpoint includes a payment summary (Tax Invoices). */
+  paid_amount?: string;
+}
+
+export type PaymentMode = "cash" | "cheque" | "bank_transfer" | "upi" | "card" | "other";
+
+export interface Receipt {
+  id: number;
+  receipt_no: string;
+  financial_year: string;
+  company_id: number;
+  company_name?: string;
+  company_code?: string;
+  customer_id: number;
+  customer_name?: string;
+  tax_invoice_id: number | null;
+  invoice_number?: string;
+  amount: string;
+  payment_mode: PaymentMode;
+  reference_no: string | null;
+  received_date: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
 }

@@ -24,7 +24,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, SwapOutlin
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Company, Customer, Item, SalesDocument, DocumentLineItem, DocStatus } from "../types";
+import { Company, Customer, Item, SalesDocument, DocumentLineItem, DocStatus, Role } from "../types";
 
 const PAGE_SIZE = 10;
 
@@ -52,6 +52,8 @@ export interface ConvertTarget {
   apiPath: string;
   routePath: string;
   title: string;
+  /** If set, only these roles can convert to this target (e.g. Tax Invoice needs admin/super_admin). */
+  allowedRoles?: Role[];
 }
 
 interface SalesDocumentPageProps {
@@ -60,12 +62,25 @@ interface SalesDocumentPageProps {
   pluralTitle: string;
   statusLabels?: Partial<Record<DocStatus, string>>;
   convertTargets?: ConvertTarget[];
+  /** If set, only these roles can create/edit/convert this document type (others get a read-only view + PDF). */
+  restrictedToRoles?: Role[];
+  /** Adds Paid / Balance Due columns, sourced from the list endpoint's paid_amount field (Tax Invoices). */
+  showPaymentStatus?: boolean;
 }
 
-export function SalesDocumentPage({ apiPath, title, pluralTitle, statusLabels, convertTargets }: SalesDocumentPageProps) {
+export function SalesDocumentPage({
+  apiPath,
+  title,
+  pluralTitle,
+  statusLabels,
+  convertTargets,
+  restrictedToRoles,
+  showPaymentStatus,
+}: SalesDocumentPageProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const labels = { ...DEFAULT_STATUS_LABELS, ...statusLabels };
+  const canManage = !restrictedToRoles || (user ? restrictedToRoles.includes(user.role) : false);
 
   const [rows, setRows] = useState<SalesDocument[]>([]);
   const [total, setTotal] = useState(0);
@@ -86,6 +101,9 @@ export function SalesDocumentPage({ apiPath, title, pluralTitle, statusLabels, c
   const lineItems = Form.useWatch("items", form) as DocumentLineItem[] | undefined;
 
   const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const availableConvertTargets = (convertTargets ?? []).filter(
+    (t) => !t.allowedRoles || (user && t.allowedRoles.includes(user.role))
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -316,18 +334,39 @@ export function SalesDocumentPage({ apiPath, title, pluralTitle, statusLabels, c
       key: "grand_total",
       render: (v: string) => `Rs. ${Number(v).toFixed(2)}`,
     },
+    ...(showPaymentStatus
+      ? [
+          {
+            title: "Paid",
+            key: "paid_amount",
+            render: (_: unknown, record: SalesDocument) => `Rs. ${Number(record.paid_amount ?? 0).toFixed(2)}`,
+          },
+          {
+            title: "Balance Due",
+            key: "balance_due",
+            render: (_: unknown, record: SalesDocument) => {
+              const balance = Number(record.grand_total) - Number(record.paid_amount ?? 0);
+              return <Tag color={balance > 0.001 ? "warning" : "success"}>{`Rs. ${balance.toFixed(2)}`}</Tag>;
+            },
+          },
+        ]
+      : []),
     {
       title: "Actions",
       key: "actions",
       width: 190,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canManage ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           <Button size="small" icon={<FilePdfOutlined />} onClick={() => downloadPdf(record)} />
-          {convertTargets && convertTargets.length > 0 && record.status === "accepted" && (
+          {canManage && availableConvertTargets.length > 0 && record.status === "accepted" && (
             <Dropdown
               menu={{
-                items: convertTargets.map((t) => ({
+                items: availableConvertTargets.map((t) => ({
                   key: t.apiPath,
                   label: `Convert to ${t.title}`,
                   onClick: () => openConvert(record, t),
@@ -337,7 +376,7 @@ export function SalesDocumentPage({ apiPath, title, pluralTitle, statusLabels, c
               <Button size="small" icon={<SwapOutlined />} />
             </Dropdown>
           )}
-          {canDelete && record.status === "draft" && (
+          {canManage && canDelete && record.status === "draft" && (
             <Popconfirm title={`Delete this ${title.toLowerCase()}?`} onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
             </Popconfirm>
@@ -369,9 +408,11 @@ export function SalesDocumentPage({ apiPath, title, pluralTitle, statusLabels, c
             }}
             style={{ width: 220 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New {title}
-          </Button>
+          {canManage && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New {title}
+            </Button>
+          )}
         </Space>
       </Space>
 

@@ -6,7 +6,14 @@ import { getNextDocNumber } from "../services/numbering";
 import { computeTotals } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
-import { Company, Customer, DocType, DocumentItem, DocumentRecord } from "../types";
+import { Company, Customer, DocType, DocumentItem, DocumentRecord, Role } from "../types";
+
+export interface SalesDocumentRouterOptions {
+  /** If set, only these roles may create/edit this document type (default: any authenticated role). */
+  createRoles?: Role[];
+  /** If set, list/detail responses include paid_amount/balance_due from the receipts table. */
+  includePaymentSummary?: boolean;
+}
 
 interface LineItemInput {
   item_id: number | null;
@@ -82,13 +89,22 @@ function validateAndNormalizeLines(rawItems: unknown): LineItemInput[] {
  * same `documents`/`document_items` tables, distinguished by `docType`, and
  * gets its own independent numbering series via `getNextDocNumber`.
  */
-export function createSalesDocumentRouter(docType: DocType, title: string) {
+export function createSalesDocumentRouter(
+  docType: DocType,
+  title: string,
+  options: SalesDocumentRouterOptions = {}
+) {
   const router = Router();
   router.use(requireAuth);
 
+  const createGuard = options.createRoles ? [requireRole(...options.createRoles)] : [];
+  const paymentSelect = options.includePaymentSummary
+    ? ", COALESCE((SELECT SUM(r.amount) FROM receipts r WHERE r.tax_invoice_id = d.id), 0) as paid_amount"
+    : "";
+
   async function findById(id: number): Promise<DocumentRecord | undefined> {
     const [rows] = await pool.query<any[]>(
-      "SELECT * FROM documents WHERE id = ? AND doc_type = ? LIMIT 1",
+      `SELECT d.*${paymentSelect} FROM documents d WHERE d.id = ? AND d.doc_type = ? LIMIT 1`,
       [id, docType]
     );
     return rows[0] as DocumentRecord | undefined;
@@ -114,7 +130,7 @@ export function createSalesDocumentRouter(docType: DocType, title: string) {
       const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
       const [rows] = await pool.query<any[]>(
-        `SELECT d.*, c.name as customer_name, co.name as company_name, co.code as company_code
+        `SELECT d.*, c.name as customer_name, co.name as company_name, co.code as company_code${paymentSelect}
          FROM documents d
          JOIN customers c ON c.id = d.customer_id
          JOIN companies co ON co.id = d.company_id
@@ -147,6 +163,7 @@ export function createSalesDocumentRouter(docType: DocType, title: string) {
 
   router.post(
     "/",
+    ...createGuard,
     asyncHandler(async (req, res) => {
       const { company_id, customer_id, issue_date, notes, items, converted_from_id } = req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
@@ -277,6 +294,7 @@ export function createSalesDocumentRouter(docType: DocType, title: string) {
 
   router.put(
     "/:id",
+    ...createGuard,
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
       const existing = await findById(id);

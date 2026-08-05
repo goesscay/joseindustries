@@ -138,3 +138,30 @@ CREATE TABLE IF NOT EXISTS document_items (
   FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
   FOREIGN KEY (item_id) REFERENCES items(id)
 );
+
+-- Phase 3: payments received against a Tax Invoice. Kept as its own table
+-- (rather than another `documents` row) since a receipt's shape - one payment,
+-- one payment mode, one linked invoice - doesn't fit the line-items model the
+-- other document types share. Still uses the same doc_counters series
+-- (doc_type = 'receipt') for its RCT/<company>/<FY>/<seq> numbering.
+CREATE TABLE IF NOT EXISTS receipts (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  receipt_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  customer_id INT UNSIGNED NOT NULL,
+  tax_invoice_id INT UNSIGNED NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  payment_mode ENUM('cash', 'cheque', 'bank_transfer', 'upi', 'card', 'other') NOT NULL DEFAULT 'cash',
+  reference_no VARCHAR(100) NULL,
+  received_date DATE NOT NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_receipt_no (receipt_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (customer_id) REFERENCES customers(id),
+  FOREIGN KEY (tax_invoice_id) REFERENCES documents(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);

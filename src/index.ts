@@ -12,6 +12,8 @@ import { itemsRouter } from "./routes/items";
 import { quotationsRouter } from "./routes/quotations";
 import { proformaInvoicesRouter } from "./routes/proformaInvoices";
 import { deliveryChallansRouter } from "./routes/deliveryChallans";
+import { taxInvoicesRouter } from "./routes/taxInvoices";
+import { receiptsRouter } from "./routes/receipts";
 
 dotenv.config();
 
@@ -32,6 +34,8 @@ app.use("/api/items", itemsRouter);
 app.use("/api/quotations", quotationsRouter);
 app.use("/api/proforma-invoices", proformaInvoicesRouter);
 app.use("/api/delivery-challans", deliveryChallansRouter);
+app.use("/api/tax-invoices", taxInvoicesRouter);
+app.use("/api/receipts", receiptsRouter);
 
 app.use(express.static(clientDistPath));
 

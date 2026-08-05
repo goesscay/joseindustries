@@ -24,11 +24,14 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │   ├── routes/companies.ts  # /api/companies: the GST-registered entities
 │   ├── routes/customers.ts  # /api/customers
 │   ├── routes/items.ts      # /api/items: product/service catalog
-│   ├── routes/salesDocuments.ts    # createSalesDocumentRouter(docType, title) - shared
+│   ├── routes/salesDocuments.ts    # createSalesDocumentRouter(docType, title, opts) - shared
 │   │                               # CRUD/PDF factory used by all document types below
 │   ├── routes/quotations.ts        # /api/quotations
 │   ├── routes/proformaInvoices.ts  # /api/proforma-invoices
-│   └── routes/deliveryChallans.ts  # /api/delivery-challans
+│   ├── routes/deliveryChallans.ts  # /api/delivery-challans
+│   ├── routes/taxInvoices.ts       # /api/tax-invoices (create/edit: admin/super_admin only)
+│   ├── routes/receipts.ts          # /api/receipts - own schema (payment against an invoice)
+│   └── services/pdf/receiptPdf.ts  # Simple single-page receipt layout
 ├── client/                   # React + Vite + TypeScript frontend (Ant Design)
 │   └── src/
 │       ├── context/AuthContext.tsx
@@ -36,7 +39,8 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │       ├── components/SalesDocumentPage.tsx  # Shared list+form+convert UI, config-driven
 │       └── pages/                 # LoginPage, HomePage, UsersPage, CompaniesPage,
 │                                   # CustomersPage, ItemsPage, QuotationsPage,
-│                                   # ProformaInvoicesPage, DeliveryChallansPage
+│                                   # ProformaInvoicesPage, DeliveryChallansPage,
+│                                   # TaxInvoicesPage, ReceiptsPage
 ├── dist/                     # Compiled backend (generated, gitignored)
 ├── public/                   # Built frontend assets (generated, gitignored)
 ├── .env.example              # Copy to .env for local dev
@@ -51,7 +55,7 @@ Three roles: `super_admin`, `admin`, `staff`.
 - `staff` has no access to User Management.
 - The app always keeps at least one active `super_admin` — the last one can't be demoted, deactivated, or deleted.
 
-## Sales documents (Phase 1: Quotations, Phase 2: Proforma Invoice + Delivery Challan)
+## Sales documents (Phase 1: Quotations · Phase 2: Proforma Invoice + Delivery Challan · Phase 3: Tax Invoice + Receipts)
 
 Replaces the Excel-based quotation/invoice process, whose shared-file editing let two people
 claim the same "next number" at once. Numbers are now issued by `getNextDocNumber()`
@@ -92,6 +96,22 @@ action that opens the next stage's form pre-filled with its company, customer, r
 and line items, and links back via `converted_from_id`; submitting navigates to the new
 document's own list. Delivery Challans reuse the same value/GST layout as the other types,
 just with a different heading and declaration text.
+
+Phase 3 adds **Tax Invoice** and **Receipts**:
+- Tax Invoice reuses the same `createSalesDocumentRouter` factory, but with
+  `createRoles: ['super_admin', 'admin']` - the one document type Staff can view/download but
+  not create or edit, per its legal weight as the GST-binding document. The list/detail
+  responses also join a `paid_amount` from `receipts`, and the Tax Invoices page shows
+  Paid/Balance Due columns - the "outstanding dues" view, rather than a separate report.
+- Receipts (`src/routes/receipts.ts`, `receipts` table) record a payment against one Tax
+  Invoice - deliberately **not** modeled as another `documents` row, since a receipt's shape
+  (one payment, one mode, one linked invoice) doesn't fit the line-items model the other
+  types share. Still draws from the same `doc_counters` series (`RCT/<company>/<FY>/<seq>`)
+  and gets its own simple single-page PDF (`receiptPdf.ts`) - no line items or GST breakup,
+  just the amount, payment mode, reference, and the invoice it's applied against.
+- Any accepted Quotation, Proforma Invoice, or Delivery Challan can convert directly to a Tax
+  Invoice (not only through the full chain) - but that specific convert option only appears
+  for Admin/Super Admin, since the target endpoint would otherwise reject it.
 
 ## Local development
 
