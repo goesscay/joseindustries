@@ -45,8 +45,17 @@ const TABLE_COLS = {
   amount: { x: CONTENT_LEFT + 388, width: CONTENT_RIGHT - (CONTENT_LEFT + 388) },
 };
 
-export function streamQuotationPdf(
+/**
+ * Renders any sales document (Quotation, Proforma Invoice, Delivery Challan, ...)
+ * onto a multi-page-aware PDF: the company header repeats on every page (full on
+ * page 1, condensed on continuation pages), the line-item table header repeats,
+ * and the closing block (totals, tax breakup, bank details, signatures) is
+ * measured up front and pushed onto a fresh page as a whole if it wouldn't
+ * otherwise fit - so neither ever splits across a page boundary.
+ */
+export function streamDocumentPdf(
   res: Response,
+  title: string,
   document: DocumentRecord,
   items: DocumentItem[],
   customer: Customer,
@@ -61,6 +70,7 @@ export function streamQuotationPdf(
   doc.pipe(res);
 
   const state = { y: PAGE_MARGIN, page: 1 };
+  const titleLower = title.toLowerCase();
 
   const subtotal = Number(document.subtotal);
   const cgstTotal = Number(document.cgst_total);
@@ -99,7 +109,7 @@ export function streamQuotationPdf(
 
     const rightX = CONTENT_LEFT + 320;
     const rightWidth = CONTENT_RIGHT - rightX;
-    doc.fontSize(16).fillColor(DARK).text("QUOTATION", rightX, PAGE_MARGIN, { width: rightWidth, align: "right" });
+    doc.fontSize(16).fillColor(DARK).text(title.toUpperCase(), rightX, PAGE_MARGIN, { width: rightWidth, align: "right" });
     doc.fontSize(9).fillColor(GRAY);
     doc.text(`No: ${document.doc_number}`, rightX, doc.y + 4, { width: rightWidth, align: "right" });
     doc.text(`Date: ${formatDate(document.issue_date)}`, rightX, doc.y, { width: rightWidth, align: "right" });
@@ -116,7 +126,11 @@ export function streamQuotationPdf(
     drawLogo(CONTENT_LEFT, state.y, 22);
     doc.fontSize(10).fillColor(GREEN).text(company.name, CONTENT_LEFT + 30, state.y + 4);
     doc.fontSize(9).fillColor(GRAY);
-    doc.text(`Quotation No: ${document.doc_number}   |   Date: ${formatDate(document.issue_date)}   (Continued)`, CONTENT_LEFT + 30, doc.y);
+    doc.text(
+      `${title} No: ${document.doc_number}   |   Date: ${formatDate(document.issue_date)}   (Continued)`,
+      CONTENT_LEFT + 30,
+      doc.y
+    );
     state.y = Math.max(doc.y, state.y + 22) + 8;
     doc.moveTo(CONTENT_LEFT, state.y).lineTo(CONTENT_RIGHT, state.y).strokeColor(BORDER).stroke();
     state.y += 10;
@@ -344,7 +358,7 @@ export function streamQuotationPdf(
   // Declaration + Bank details + signatures
   doc.fontSize(7.5).fillColor(MUTED);
   doc.text(
-    "Declaration: We declare that this quotation shows the actual price of the goods described and that all particulars are true and correct.",
+    `Declaration: We declare that this ${titleLower} shows the actual price of the goods described and that all particulars are true and correct.`,
     CONTENT_LEFT,
     state.y,
     { width: CONTENT_WIDTH }
@@ -382,7 +396,7 @@ export function streamQuotationPdf(
       .fontSize(7)
       .fillColor(MUTED)
       .text(
-        `This is a computer-generated quotation and does not require a signature.   Page ${i + 1} of ${pageRange.count}`,
+        `This is a computer-generated ${titleLower} and does not require a signature.   Page ${i + 1} of ${pageRange.count}`,
         CONTENT_LEFT,
         PAGE_HEIGHT - PAGE_MARGIN,
         { width: CONTENT_WIDTH, align: "center" }

@@ -68,8 +68,11 @@ export interface DocumentLineItem {
   line_total?: number;
 }
 
-export interface Quotation {
+export type DocType = "quotation" | "proforma_invoice" | "delivery_challan" | "tax_invoice" | "receipt";
+
+export interface SalesDocument {
   id: number;
+  doc_type: DocType;
   doc_number: string;
   financial_year: string;
   company_id: number;
@@ -78,6 +81,7 @@ export interface Quotation {
   customer_id: number;
   customer_name?: string;
   status: DocStatus;
+  converted_from_id: number | null;
   issue_date: string;
   notes: string | null;
 

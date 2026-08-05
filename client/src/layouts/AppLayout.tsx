@@ -10,6 +10,8 @@ import {
   TagsOutlined,
   FileTextOutlined,
   BankOutlined,
+  FileDoneOutlined,
+  CarOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo-black.png";
@@ -28,6 +30,8 @@ export function AppLayout() {
   const navItems = user
     ? [
         { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
+        { key: "/proforma-invoices", icon: <FileDoneOutlined />, label: "Proforma Invoices" },
+        { key: "/delivery-challans", icon: <CarOutlined />, label: "Delivery Challans" },
         { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
         { key: "/items", icon: <TagsOutlined />, label: "Items" },
         { key: "/companies", icon: <BankOutlined />, label: "Companies" },

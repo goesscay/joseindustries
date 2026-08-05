@@ -10,6 +10,8 @@ import { companiesRouter } from "./routes/companies";
 import { customersRouter } from "./routes/customers";
 import { itemsRouter } from "./routes/items";
 import { quotationsRouter } from "./routes/quotations";
+import { proformaInvoicesRouter } from "./routes/proformaInvoices";
+import { deliveryChallansRouter } from "./routes/deliveryChallans";
 
 dotenv.config();
 
@@ -28,6 +30,8 @@ app.use("/api/companies", companiesRouter);
 app.use("/api/customers", customersRouter);
 app.use("/api/items", itemsRouter);
 app.use("/api/quotations", quotationsRouter);
+app.use("/api/proforma-invoices", proformaInvoicesRouter);
+app.use("/api/delivery-challans", deliveryChallansRouter);
 
 app.use(express.static(clientDistPath));
 

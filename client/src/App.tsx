@@ -8,6 +8,8 @@ import { CustomersPage } from "./pages/CustomersPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { QuotationsPage } from "./pages/QuotationsPage";
+import { ProformaInvoicesPage } from "./pages/ProformaInvoicesPage";
+import { DeliveryChallansPage } from "./pages/DeliveryChallansPage";
 
 function App() {
   return (
@@ -17,6 +19,8 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/quotations" element={<QuotationsPage />} />
+          <Route path="/proforma-invoices" element={<ProformaInvoicesPage />} />
+          <Route path="/delivery-challans" element={<DeliveryChallansPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/items" element={<ItemsPage />} />
           <Route path="/companies" element={<CompaniesPage />} />

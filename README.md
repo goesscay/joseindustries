@@ -16,7 +16,7 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │   ├── db/seedAdmin.ts      # Bootstraps the first super_admin user
 │   ├── middleware/auth.ts   # requireAuth / requireRole (JWT cookie)
 │   ├── services/numbering.ts       # Atomic per-company, per-type, per-FY document numbers
-│   ├── services/pdf/quotationPdf.ts # Multi-page aware: repeating header, non-splitting footer
+│   ├── services/pdf/documentPdf.ts # Multi-page aware: repeating header, non-splitting footer
 │   ├── utils/gst.ts         # CGST/SGST vs IGST split, HSN grouping
 │   ├── utils/numberToWords.ts      # Indian-numbering amount-in-words
 │   ├── routes/auth.ts       # /api/auth: login, logout, me
@@ -24,13 +24,19 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │   ├── routes/companies.ts  # /api/companies: the GST-registered entities
 │   ├── routes/customers.ts  # /api/customers
 │   ├── routes/items.ts      # /api/items: product/service catalog
-│   └── routes/quotations.ts # /api/quotations: CRUD + PDF export
+│   ├── routes/salesDocuments.ts    # createSalesDocumentRouter(docType, title) - shared
+│   │                               # CRUD/PDF factory used by all document types below
+│   ├── routes/quotations.ts        # /api/quotations
+│   ├── routes/proformaInvoices.ts  # /api/proforma-invoices
+│   └── routes/deliveryChallans.ts  # /api/delivery-challans
 ├── client/                   # React + Vite + TypeScript frontend (Ant Design)
 │   └── src/
 │       ├── context/AuthContext.tsx
 │       ├── layouts/AppLayout.tsx   # Sidebar (desktop) / Drawer (mobile)
+│       ├── components/SalesDocumentPage.tsx  # Shared list+form+convert UI, config-driven
 │       └── pages/                 # LoginPage, HomePage, UsersPage, CompaniesPage,
-│                                   # CustomersPage, ItemsPage, QuotationsPage
+│                                   # CustomersPage, ItemsPage, QuotationsPage,
+│                                   # ProformaInvoicesPage, DeliveryChallansPage
 ├── dist/                     # Compiled backend (generated, gitignored)
 ├── public/                   # Built frontend assets (generated, gitignored)
 ├── .env.example              # Copy to .env for local dev
@@ -45,7 +51,7 @@ Three roles: `super_admin`, `admin`, `staff`.
 - `staff` has no access to User Management.
 - The app always keeps at least one active `super_admin` — the last one can't be demoted, deactivated, or deleted.
 
-## Sales documents (Phase 1: Quotations)
+## Sales documents (Phase 1: Quotations, Phase 2: Proforma Invoice + Delivery Challan)
 
 Replaces the Excel-based quotation/invoice process, whose shared-file editing let two people
 claim the same "next number" at once. Numbers are now issued by `getNextDocNumber()`
@@ -74,8 +80,18 @@ breakup, bank details, signatures) is measured up front and pushed onto a fresh 
 whole if it wouldn't otherwise fit, so it's never split across a page boundary.
 
 Phase 1 covers Companies, Customers, an Items catalog, and Quotations (create/edit/list/PDF
-export). Staff and above can create Quotations/Customers/Items; deleting any of them requires
+export). Staff and above can create documents/Customers/Items; deleting any of them requires
 `admin`/`super_admin`.
+
+Phase 2 adds **Proforma Invoice** and **Delivery Challan** on the same shared foundation:
+`createSalesDocumentRouter(docType, title)` (`src/routes/salesDocuments.ts`) generates the
+CRUD + PDF endpoints for each document type, and `<SalesDocumentPage>` (client) is the
+matching config-driven list/form UI - so each new type is a ~10-line wrapper rather than a
+duplicated page. An accepted document (Quotation or Proforma Invoice) shows a **Convert**
+action that opens the next stage's form pre-filled with its company, customer, references,
+and line items, and links back via `converted_from_id`; submitting navigates to the new
+document's own list. Delivery Challans reuse the same value/GST layout as the other types,
+just with a different heading and declaration text.
 
 ## Local development
 
