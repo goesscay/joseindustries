@@ -12,6 +12,10 @@ import { ProformaInvoicesPage } from "./pages/ProformaInvoicesPage";
 import { DeliveryChallansPage } from "./pages/DeliveryChallansPage";
 import { TaxInvoicesPage } from "./pages/TaxInvoicesPage";
 import { ReceiptsPage } from "./pages/ReceiptsPage";
+import { VendorsPage } from "./pages/VendorsPage";
+import { ExpenseCategoriesPage } from "./pages/ExpenseCategoriesPage";
+import { ExpensesPage } from "./pages/ExpensesPage";
+import { VendorPaymentsPage } from "./pages/VendorPaymentsPage";
 
 function App() {
   return (
@@ -28,6 +32,10 @@ function App() {
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/items" element={<ItemsPage />} />
           <Route path="/companies" element={<CompaniesPage />} />
+          <Route path="/vendors" element={<VendorsPage />} />
+          <Route path="/expenses" element={<ExpensesPage />} />
+          <Route path="/vendor-payments" element={<VendorPaymentsPage />} />
+          <Route path="/expense-categories" element={<ExpenseCategoriesPage />} />
           <Route element={<ProtectedRoute allowedRoles={["super_admin", "admin"]} />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>

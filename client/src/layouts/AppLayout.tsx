@@ -14,6 +14,10 @@ import {
   CarOutlined,
   AuditOutlined,
   WalletOutlined,
+  ShopOutlined,
+  FolderOutlined,
+  AccountBookOutlined,
+  MoneyCollectOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo-black.png";
@@ -39,11 +43,17 @@ export function AppLayout() {
         { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
         { key: "/items", icon: <TagsOutlined />, label: "Items" },
         { key: "/companies", icon: <BankOutlined />, label: "Companies" },
+        { type: "divider" as const },
+        { key: "/vendors", icon: <ShopOutlined />, label: "Vendors" },
+        { key: "/expenses", icon: <AccountBookOutlined />, label: "Expenses" },
+        { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
+        { key: "/expense-categories", icon: <FolderOutlined />, label: "Expense Categories" },
         ...(user.role !== "staff" ? [{ key: "/users", icon: <TeamOutlined />, label: "Users" }] : []),
       ]
     : [];
 
-  const selectedKey = navItems.find((item) => location.pathname.startsWith(item.key))?.key ?? "/";
+  const selectedKey =
+    navItems.find((item) => "key" in item && item.key && location.pathname.startsWith(item.key))?.key ?? "/";
 
   const menu = (
     <Menu

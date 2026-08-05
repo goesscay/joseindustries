@@ -2,12 +2,19 @@ import { pool } from "../config/db";
 import { getFinancialYear } from "./financialYear";
 import { DocType } from "../types";
 
-const PREFIXES: Record<DocType, string> = {
+// Accounts-module series (expenses/vendor_payments) live in their own tables,
+// not the `documents` table, so they're kept out of the ENUM-bound DocType
+// and just widen the numbering series here.
+export type SeriesType = DocType | "expense" | "vendor_payment";
+
+const PREFIXES: Record<SeriesType, string> = {
   quotation: "QTN",
   proforma_invoice: "PI",
   delivery_challan: "DC",
   tax_invoice: "INV",
   receipt: "RCT",
+  expense: "EXP",
+  vendor_payment: "PMT",
 };
 
 /**
@@ -23,7 +30,7 @@ const PREFIXES: Record<DocType, string> = {
  * connection-scoped), so this explicitly checks out a single connection
  * rather than using the shared pool.
  */
-export async function getNextDocNumber(docType: DocType, companyCode: string, date: Date = new Date()) {
+export async function getNextDocNumber(docType: SeriesType, companyCode: string, date: Date = new Date()) {
   const financialYear = getFinancialYear(date);
   const conn = await pool.getConnection();
 

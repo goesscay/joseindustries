@@ -14,6 +14,10 @@ import { proformaInvoicesRouter } from "./routes/proformaInvoices";
 import { deliveryChallansRouter } from "./routes/deliveryChallans";
 import { taxInvoicesRouter } from "./routes/taxInvoices";
 import { receiptsRouter } from "./routes/receipts";
+import { vendorsRouter } from "./routes/vendors";
+import { expenseCategoriesRouter } from "./routes/expenseCategories";
+import { expensesRouter } from "./routes/expenses";
+import { vendorPaymentsRouter } from "./routes/vendorPayments";
 
 dotenv.config();
 
@@ -36,6 +40,10 @@ app.use("/api/proforma-invoices", proformaInvoicesRouter);
 app.use("/api/delivery-challans", deliveryChallansRouter);
 app.use("/api/tax-invoices", taxInvoicesRouter);
 app.use("/api/receipts", receiptsRouter);
+app.use("/api/vendors", vendorsRouter);
+app.use("/api/expense-categories", expenseCategoriesRouter);
+app.use("/api/expenses", expensesRouter);
+app.use("/api/vendor-payments", vendorPaymentsRouter);
 
 app.use(express.static(clientDistPath));
 

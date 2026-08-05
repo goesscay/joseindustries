@@ -164,6 +164,86 @@ ALTER TABLE documents
 ALTER TABLE document_items
   ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5, 2) NOT NULL DEFAULT 0;
 
+-- Accounts module (simple cash-basis tracker): the "purchases" mirror of the
+-- Sales module above. Vendors mirror customers; expenses mirror documents but
+-- are deliberately their own table (no line items, no GST split logic needed
+-- for a first pass); vendor_payments mirrors receipts.
+
+CREATE TABLE IF NOT EXISTS vendors (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  gstin VARCHAR(15) NULL,
+  phone VARCHAR(20) NULL,
+  email VARCHAR(255) NULL,
+  address TEXT NULL,
+  state VARCHAR(100) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Small editable lookup list (Raw Material, Salaries, Rent, ...), seeded below.
+CREATE TABLE IF NOT EXISTS expense_categories (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO expense_categories (name) VALUES
+  ('Raw Material'), ('Salaries & Wages'), ('Rent'), ('Electricity'),
+  ('Transport & Freight'), ('Office Supplies'), ('Repairs & Maintenance'), ('Miscellaneous');
+
+-- One row per purchase bill/expense. company/vendor scoped and auto-numbered
+-- (EXP/<company>/<FY>/<seq>) via the same doc_counters series the Sales
+-- module uses, so numbering stays collision-free across both directions of
+-- money movement.
+CREATE TABLE IF NOT EXISTS expenses (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  expense_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  vendor_id INT UNSIGNED NULL,
+  category_id INT UNSIGNED NULL,
+  expense_date DATE NOT NULL,
+  description VARCHAR(255) NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_amount DECIMAL(12, 2) NOT NULL,
+  reference_no VARCHAR(100) NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_expense_no (expense_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (category_id) REFERENCES expense_categories(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Money paid out - against a specific expense/bill, or on-account to a vendor
+-- (expense_id NULL). Mirrors receipts.
+CREATE TABLE IF NOT EXISTS vendor_payments (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  payment_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  vendor_id INT UNSIGNED NOT NULL,
+  expense_id INT UNSIGNED NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  payment_mode ENUM('cash', 'cheque', 'bank_transfer', 'upi', 'card', 'other') NOT NULL DEFAULT 'cash',
+  reference_no VARCHAR(100) NULL,
+  paid_date DATE NOT NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_payment_no (payment_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (expense_id) REFERENCES expenses(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
 -- Phase 3: payments received against a Tax Invoice. Kept as its own table
 -- (rather than another `documents` row) since a receipt's shape - one payment,
 -- one payment mode, one linked invoice - doesn't fit the line-items model the

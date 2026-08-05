@@ -149,6 +149,62 @@ export interface Receipt {
   updated_at: string;
 }
 
+export interface Vendor {
+  id: number;
+  name: string;
+  gstin: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  state: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExpenseCategory {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
+export interface Expense {
+  id: number;
+  expense_no: string;
+  financial_year: string;
+  company_id: number;
+  vendor_id: number | null;
+  category_id: number | null;
+  expense_date: string;
+  description: string | null;
+  amount: string;
+  tax_amount: string;
+  total_amount: string;
+  reference_no: string | null;
+  notes: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  /** Only present on the list/detail endpoints - sum of vendor_payments against this expense. */
+  paid_amount?: string;
+}
+
+export interface VendorPayment {
+  id: number;
+  payment_no: string;
+  financial_year: string;
+  company_id: number;
+  vendor_id: number;
+  expense_id: number | null;
+  amount: string;
+  payment_mode: PaymentMode;
+  reference_no: string | null;
+  paid_date: string;
+  notes: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 declare global {
   namespace Express {
     interface Request {
