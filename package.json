@@ -17,7 +17,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "tsx src/db/migrate.ts",
-    "db:seed-admin": "tsx src/db/seedAdmin.ts"
+    "db:seed-admin": "tsx src/db/seedAdmin.ts",
+    "db:seed-companies": "tsx src/db/seedCompanies.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

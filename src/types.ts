@@ -20,6 +20,25 @@ export interface JwtPayload {
 export type DocType = "quotation" | "proforma_invoice" | "delivery_challan" | "tax_invoice" | "receipt";
 export type DocStatus = "draft" | "sent" | "accepted" | "rejected" | "cancelled";
 
+export interface Company {
+  id: number;
+  code: string;
+  name: string;
+  tagline: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  state: string | null;
+  state_code: string | null;
+  bank_name: string | null;
+  bank_account_no: string | null;
+  bank_ifsc: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Customer {
   id: number;
   name: string;
@@ -62,14 +81,41 @@ export interface DocumentRecord {
   doc_type: DocType;
   doc_number: string;
   financial_year: string;
+  company_id: number;
   customer_id: number;
   status: DocStatus;
   converted_from_id: number | null;
   issue_date: string;
   notes: string | null;
+
+  consignee_name: string | null;
+  consignee_address: string | null;
+  consignee_gstin: string | null;
+  consignee_state: string | null;
+
+  transport_mode: string | null;
+  vehicle_number: string | null;
+  date_of_supply: string | null;
+  place_of_supply: string | null;
+  buyers_order_no: string | null;
+  buyers_order_date: string | null;
+  dispatch_doc_no: string | null;
+  dispatched_through: string | null;
+  destination: string | null;
+  terms_of_delivery: string | null;
+  delivery_note: string | null;
+  delivery_note_date: string | null;
+  mode_terms_of_payment: string | null;
+  other_reference: string | null;
+  supplier_reference: string | null;
+
   subtotal: string;
+  cgst_total: string;
+  sgst_total: string;
+  igst_total: string;
   tax_total: string;
   grand_total: string;
+
   created_by: number | null;
   created_at: string;
   updated_at: string;

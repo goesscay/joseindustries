@@ -11,6 +11,25 @@ export interface AppUser {
   updated_at: string;
 }
 
+export interface Company {
+  id: number;
+  code: string;
+  name: string;
+  tagline: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  state: string | null;
+  state_code: string | null;
+  bank_name: string | null;
+  bank_account_no: string | null;
+  bank_ifsc: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Customer {
   id: number;
   name: string;
@@ -53,12 +72,40 @@ export interface Quotation {
   id: number;
   doc_number: string;
   financial_year: string;
+  company_id: number;
+  company_name?: string;
+  company_code?: string;
   customer_id: number;
   customer_name?: string;
   status: DocStatus;
   issue_date: string;
   notes: string | null;
+
+  consignee_name: string | null;
+  consignee_address: string | null;
+  consignee_gstin: string | null;
+  consignee_state: string | null;
+
+  transport_mode: string | null;
+  vehicle_number: string | null;
+  date_of_supply: string | null;
+  place_of_supply: string | null;
+  buyers_order_no: string | null;
+  buyers_order_date: string | null;
+  dispatch_doc_no: string | null;
+  dispatched_through: string | null;
+  destination: string | null;
+  terms_of_delivery: string | null;
+  delivery_note: string | null;
+  delivery_note_date: string | null;
+  mode_terms_of_payment: string | null;
+  other_reference: string | null;
+  supplier_reference: string | null;
+
   subtotal: string;
+  cgst_total: string;
+  sgst_total: string;
+  igst_total: string;
   tax_total: string;
   grand_total: string;
   created_at: string;

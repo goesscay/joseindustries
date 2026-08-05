@@ -15,10 +15,13 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │   ├── db/migrate.ts        # Runs schema.sql against DB_* from .env
 │   ├── db/seedAdmin.ts      # Bootstraps the first super_admin user
 │   ├── middleware/auth.ts   # requireAuth / requireRole (JWT cookie)
-│   ├── services/numbering.ts       # Atomic per-type, per-FY document numbers
-│   ├── services/pdf/quotationPdf.ts
+│   ├── services/numbering.ts       # Atomic per-company, per-type, per-FY document numbers
+│   ├── services/pdf/quotationPdf.ts # Multi-page aware: repeating header, non-splitting footer
+│   ├── utils/gst.ts         # CGST/SGST vs IGST split, HSN grouping
+│   ├── utils/numberToWords.ts      # Indian-numbering amount-in-words
 │   ├── routes/auth.ts       # /api/auth: login, logout, me
 │   ├── routes/users.ts      # /api/users: user management CRUD (RBAC)
+│   ├── routes/companies.ts  # /api/companies: the GST-registered entities
 │   ├── routes/customers.ts  # /api/customers
 │   ├── routes/items.ts      # /api/items: product/service catalog
 │   └── routes/quotations.ts # /api/quotations: CRUD + PDF export
@@ -26,7 +29,7 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │   └── src/
 │       ├── context/AuthContext.tsx
 │       ├── layouts/AppLayout.tsx   # Sidebar (desktop) / Drawer (mobile)
-│       └── pages/                 # LoginPage, HomePage, UsersPage,
+│       └── pages/                 # LoginPage, HomePage, UsersPage, CompaniesPage,
 │                                   # CustomersPage, ItemsPage, QuotationsPage
 ├── dist/                     # Compiled backend (generated, gitignored)
 ├── public/                   # Built frontend assets (generated, gitignored)
@@ -49,17 +52,30 @@ claim the same "next number" at once. Numbers are now issued by `getNextDocNumbe
 (`src/services/numbering.ts`), which uses MySQL's `INSERT ... ON DUPLICATE KEY UPDATE
 LAST_INSERT_ID(expr)` trick on a single connection — the row lock that upsert takes makes
 concurrent requests serialize, so two people creating a quotation at the same instant can
-never receive the same number. Format: `QTN/25-26/0001`, resetting every financial year
-(Apr–Mar), per standard GST practice.
+never receive the same number. Format: `QTN/JE/25-26/0001` (doc-type / company code /
+financial year / sequence), resetting every financial year (Apr–Mar) per standard GST
+practice. Each company has its own independent counter.
 
-Phase 1 covers Customers, an Items catalog, and Quotations (create/edit/list/PDF export).
-Staff and above can create Quotations/Customers/Items; deleting any of them requires
-`admin`/`super_admin`. Later phases add Proforma Invoice, Delivery Challan, Tax Invoice
-(GST-compliant, CGST/SGST vs IGST), and Receipts/payment tracking on the same `documents` /
-`document_items` tables.
+**Two companies**: the business operates as two separate GST-registered entities, Jose
+Enterprises (`JE`) and Jose Industries (`JI`), each with its own GSTIN, address, bank details,
+and invoice series — seeded via `npm run db:seed-companies`, editable from the Companies page
+(edit requires `admin`/`super_admin`). Every document picks one at creation time.
 
-Set `COMPANY_NAME`, `COMPANY_ADDRESS`, `COMPANY_GSTIN`, `COMPANY_PHONE`, `COMPANY_EMAIL` in
-`.env` to control what's printed on generated PDFs.
+The document field set matches the company's existing Tally-style Tax Invoice template
+(consignee/ship-to, transport & dispatch references, buyer's order no, GST tax breakup by
+HSN, bank details, amount-in-words, dual signature blocks) so later phases (Proforma
+Invoice, Delivery Challan, Tax Invoice, Receipts) need no further schema changes — just reuse
+of the same `documents` / `document_items` tables. CGST/SGST vs IGST is derived automatically
+by comparing the issuing company's state to the customer's state, never chosen manually.
+
+PDFs (`src/services/pdf/quotationPdf.ts`) are multi-page aware: the company header repeats
+(full on page 1, condensed on continuation pages) and the closing block (totals, tax
+breakup, bank details, signatures) is measured up front and pushed onto a fresh page as a
+whole if it wouldn't otherwise fit, so it's never split across a page boundary.
+
+Phase 1 covers Companies, Customers, an Items catalog, and Quotations (create/edit/list/PDF
+export). Staff and above can create Quotations/Customers/Items; deleting any of them requires
+`admin`/`super_admin`.
 
 ## Local development
 
@@ -69,8 +85,9 @@ with your IP allowed via a remote-connection rule).
 ```bash
 cp .env.example .env      # fill in DB_*, JWT_SECRET
 npm install
-npm run db:migrate        # creates the users table
+npm run db:migrate        # creates all tables
 npm run db:seed-admin     # creates the first super_admin (prints its password once)
+npm run db:seed-companies # seeds Jose Enterprises + Jose Industries
 npm run dev
 ```
 
@@ -106,8 +123,8 @@ makes the one-command Hostinger deploy below work.
    host/user/password/name for the variables above.
 6. Click **NPM Install** in the Node.js app panel — this runs `npm install`, which triggers
    `postinstall` → `npm run build`, producing `dist/` and `public/`.
-7. Run the migration and seed the first super admin (via hPanel's terminal/SSH, or a one-off
-   script): `npm run db:migrate && npm run db:seed-admin`.
+7. Run the migration and seed data (via hPanel's terminal/SSH, or a one-off script):
+   `npm run db:migrate && npm run db:seed-admin && npm run db:seed-companies`.
 8. **Restart** the application. Visit your domain — it should serve the React app, with
    `/api/health` and `/api/health/db` available for a quick check.
 

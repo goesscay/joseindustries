@@ -9,6 +9,7 @@ import {
   ContactsOutlined,
   TagsOutlined,
   FileTextOutlined,
+  BankOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo-black.png";
@@ -29,6 +30,7 @@ export function AppLayout() {
         { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
         { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
         { key: "/items", icon: <TagsOutlined />, label: "Items" },
+        { key: "/companies", icon: <BankOutlined />, label: "Companies" },
         ...(user.role !== "staff" ? [{ key: "/users", icon: <TeamOutlined />, label: "Users" }] : []),
       ]
     : [];

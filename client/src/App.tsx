@@ -6,6 +6,7 @@ import { HomePage } from "./pages/HomePage";
 import { UsersPage } from "./pages/UsersPage";
 import { CustomersPage } from "./pages/CustomersPage";
 import { ItemsPage } from "./pages/ItemsPage";
+import { CompaniesPage } from "./pages/CompaniesPage";
 import { QuotationsPage } from "./pages/QuotationsPage";
 
 function App() {
@@ -18,6 +19,7 @@ function App() {
           <Route path="/quotations" element={<QuotationsPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/items" element={<ItemsPage />} />
+          <Route path="/companies" element={<CompaniesPage />} />
           <Route element={<ProtectedRoute allowedRoles={["super_admin", "admin"]} />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>
