@@ -141,6 +141,8 @@ export interface Receipt {
   customer_name?: string;
   tax_invoice_id: number | null;
   invoice_number?: string;
+  account_id: number | null;
+  account_name?: string;
   amount: string;
   payment_mode: PaymentMode;
   reference_no: string | null;
@@ -203,6 +205,8 @@ export interface VendorPayment {
   vendor_name?: string;
   expense_id: number | null;
   expense_number?: string;
+  account_id: number | null;
+  account_name?: string;
   amount: string;
   payment_mode: PaymentMode;
   reference_no: string | null;
@@ -210,4 +214,50 @@ export interface VendorPayment {
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AccountType = "cash" | "bank";
+
+export interface Account {
+  id: number;
+  company_id: number;
+  company_name?: string;
+  company_code?: string;
+  name: string;
+  account_type: AccountType;
+  bank_name: string | null;
+  account_number: string | null;
+  ifsc: string | null;
+  opening_balance: string;
+  is_active: boolean | number;
+  created_at: string;
+  updated_at: string;
+  /** Only present on the list/detail endpoints - opening_balance plus every posted movement. */
+  balance?: number;
+}
+
+export type JournalDirection = "in" | "out";
+
+export interface JournalEntry {
+  id: number;
+  account_id: number;
+  account_name?: string;
+  entry_date: string;
+  direction: JournalDirection;
+  amount: string;
+  particulars: string;
+  notes: string | null;
+  transfer_group: string | null;
+  created_at: string;
+}
+
+export interface LedgerEntry {
+  id: number;
+  source_type: "receipt" | "vendor_payment" | "journal_entry";
+  source_id: number;
+  entry_date: string;
+  direction: JournalDirection;
+  amount: number;
+  particulars: string;
+  running_balance: number;
 }

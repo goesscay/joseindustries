@@ -16,6 +16,7 @@ import { VendorsPage } from "./pages/VendorsPage";
 import { ExpenseCategoriesPage } from "./pages/ExpenseCategoriesPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { VendorPaymentsPage } from "./pages/VendorPaymentsPage";
+import { AccountsPage } from "./pages/AccountsPage";
 
 function App() {
   return (
@@ -36,6 +37,7 @@ function App() {
           <Route path="/expenses" element={<ExpensesPage />} />
           <Route path="/vendor-payments" element={<VendorPaymentsPage />} />
           <Route path="/expense-categories" element={<ExpenseCategoriesPage />} />
+          <Route path="/accounts" element={<AccountsPage />} />
           <Route element={<ProtectedRoute allowedRoles={["super_admin", "admin"]} />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>

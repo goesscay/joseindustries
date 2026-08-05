@@ -57,7 +57,7 @@ vendorPaymentsRouter.get(
 );
 
 async function validatePayload(body: any) {
-  const { company_id, vendor_id, expense_id, amount, payment_mode, paid_date } = body ?? {};
+  const { company_id, vendor_id, expense_id, account_id, amount, payment_mode, paid_date } = body ?? {};
 
   if (!company_id || !vendor_id || !amount || !payment_mode || !paid_date) {
     return { error: "company_id, vendor_id, amount, payment_mode and paid_date are required" };
@@ -87,6 +87,15 @@ async function validatePayload(body: any) {
     }
   }
 
+  if (account_id) {
+    const [accountRows] = await pool.query<any[]>("SELECT id, company_id FROM accounts WHERE id = ?", [account_id]);
+    const account = accountRows[0];
+    if (!account) return { error: "Account not found" };
+    if (account.company_id !== Number(company_id)) {
+      return { error: "Selected account does not belong to this company" };
+    }
+  }
+
   return { company, vendor, expense };
 }
 
@@ -97,20 +106,21 @@ vendorPaymentsRouter.post(
     if ("error" in result) return res.status(400).json({ message: result.error });
     const { company } = result;
 
-    const { vendor_id, expense_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
+    const { vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
 
     const { docNumber, financialYear } = await getNextDocNumber("vendor_payment", company!.code, new Date(paid_date));
 
     const [insertResult] = await pool.query<any>(
       `INSERT INTO vendor_payments
-         (payment_no, financial_year, company_id, vendor_id, expense_id, amount, payment_mode, reference_no, paid_date, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (payment_no, financial_year, company_id, vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         docNumber,
         financialYear,
         req.body.company_id,
         vendor_id,
         expense_id || null,
+        account_id || null,
         amount,
         payment_mode,
         reference_no || null,
@@ -135,14 +145,25 @@ vendorPaymentsRouter.put(
     const result = await validatePayload(req.body);
     if ("error" in result) return res.status(400).json({ message: result.error });
 
-    const { vendor_id, expense_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
+    const { vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
 
     await pool.query(
       `UPDATE vendor_payments SET
-         company_id = ?, vendor_id = ?, expense_id = ?, amount = ?, payment_mode = ?,
+         company_id = ?, vendor_id = ?, expense_id = ?, account_id = ?, amount = ?, payment_mode = ?,
          reference_no = ?, paid_date = ?, notes = ?
        WHERE id = ?`,
-      [req.body.company_id, vendor_id, expense_id || null, amount, payment_mode, reference_no || null, paid_date, notes || null, id]
+      [
+        req.body.company_id,
+        vendor_id,
+        expense_id || null,
+        account_id || null,
+        amount,
+        payment_mode,
+        reference_no || null,
+        paid_date,
+        notes || null,
+        id,
+      ]
     );
 
     const updated = await findById(id);

@@ -270,3 +270,63 @@ CREATE TABLE IF NOT EXISTS receipts (
   FOREIGN KEY (tax_invoice_id) REFERENCES documents(id),
   FOREIGN KEY (created_by) REFERENCES users(id)
 );
+
+-- Accounts Phase B: Cash & Bank ledgers. Every money movement (a Receipt in,
+-- a Vendor Payment out, or a manual Journal Entry) posts against one of
+-- these, giving each a running balance. Company-scoped since Jose
+-- Enterprises and Jose Industries keep separate books.
+CREATE TABLE IF NOT EXISTS accounts (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  account_type ENUM('cash', 'bank') NOT NULL DEFAULT 'bank',
+  bank_name VARCHAR(100) NULL,
+  account_number VARCHAR(50) NULL,
+  ifsc VARCHAR(20) NULL,
+  opening_balance DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_account_name (company_id, name),
+  FOREIGN KEY (company_id) REFERENCES companies(id)
+);
+
+-- Manual entries for anything that isn't a Receipt or Vendor Payment -
+-- opening balances, bank charges/interest, owner's capital, petty cash
+-- drawdowns. A transfer between two accounts is recorded as a linked pair
+-- (same transfer_group) so it can be shown/deleted together.
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  account_id INT UNSIGNED NOT NULL,
+  entry_date DATE NOT NULL,
+  direction ENUM('in', 'out') NOT NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  particulars VARCHAR(255) NOT NULL,
+  notes TEXT NULL,
+  transfer_group CHAR(36) NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (account_id) REFERENCES accounts(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Every money movement now posts against a ledger account. Column only (no
+-- FK constraint added via ALTER - MariaDB's IF NOT EXISTS support doesn't
+-- extend to ADD CONSTRAINT); the app enforces the reference on write, same
+-- as other nullable lookups added via ALTER elsewhere in this file.
+ALTER TABLE receipts
+  ADD COLUMN IF NOT EXISTS account_id INT UNSIGNED NULL;
+
+ALTER TABLE vendor_payments
+  ADD COLUMN IF NOT EXISTS account_id INT UNSIGNED NULL;
+
+-- One-time seed: turn each existing company's printed bank details into a
+-- first-class Bank account, plus a Cash account, so Phase B ships with
+-- ledgers ready to use instead of an empty list. Safe to re-run (unique key
+-- on company_id+name makes this idempotent).
+INSERT IGNORE INTO accounts (company_id, name, account_type, bank_name, account_number, ifsc, opening_balance)
+SELECT id, 'Cash', 'cash', NULL, NULL, NULL, 0 FROM companies;
+
+INSERT IGNORE INTO accounts (company_id, name, account_type, bank_name, account_number, ifsc, opening_balance)
+SELECT id, COALESCE(bank_name, 'Bank'), 'bank', bank_name, bank_account_no, bank_ifsc, 0
+FROM companies WHERE bank_name IS NOT NULL;

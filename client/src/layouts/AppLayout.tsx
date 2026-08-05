@@ -18,6 +18,7 @@ import {
   FolderOutlined,
   AccountBookOutlined,
   MoneyCollectOutlined,
+  CreditCardOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo-black.png";
@@ -48,6 +49,7 @@ export function AppLayout() {
         { key: "/expenses", icon: <AccountBookOutlined />, label: "Expenses" },
         { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
         { key: "/expense-categories", icon: <FolderOutlined />, label: "Expense Categories" },
+        { key: "/accounts", icon: <CreditCardOutlined />, label: "Bank & Cash" },
         ...(user.role !== "staff" ? [{ key: "/users", icon: <TeamOutlined />, label: "Users" }] : []),
       ]
     : [];

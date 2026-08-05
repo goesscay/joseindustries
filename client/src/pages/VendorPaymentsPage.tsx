@@ -5,7 +5,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Company, Expense, PaymentMode, Vendor, VendorPayment } from "../types";
+import { Account, Company, Expense, PaymentMode, Vendor, VendorPayment } from "../types";
 
 const PAGE_SIZE = 10;
 
@@ -29,6 +29,7 @@ export function VendorPaymentsPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<VendorPayment | null>(null);
@@ -37,6 +38,7 @@ export function VendorPaymentsPage() {
 
   const canDelete = user?.role === "super_admin" || user?.role === "admin";
   const selectedVendorId = Form.useWatch("vendor_id", form);
+  const selectedCompanyId = Form.useWatch("company_id", form);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,6 +63,7 @@ export function VendorPaymentsPage() {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
     api.get<{ data: Vendor[] }>("/vendors?perPage=200").then((res) => setVendors(res.data)).catch(() => {});
     api.get<{ data: Expense[] }>("/expenses?perPage=200").then((res) => setExpenses(res.data)).catch(() => {});
+    api.get<{ data: Account[] }>("/accounts").then((res) => setAccounts(res.data)).catch(() => {});
   }, []);
 
   const expenseOptions = expenses
@@ -69,6 +72,10 @@ export function VendorPaymentsPage() {
       const balance = Number(exp.total_amount) - Number(exp.paid_amount ?? 0);
       return { value: exp.id, label: `${exp.expense_no} - Balance Rs. ${balance.toFixed(2)}` };
     });
+
+  const accountOptions = accounts
+    .filter((a) => !selectedCompanyId || a.company_id === selectedCompanyId)
+    .map((a) => ({ value: a.id, label: a.name }));
 
   function openCreate() {
     setEditing(null);
@@ -87,6 +94,7 @@ export function VendorPaymentsPage() {
       company_id: record.company_id,
       vendor_id: record.vendor_id,
       expense_id: record.expense_id,
+      account_id: record.account_id,
       amount: Number(record.amount),
       payment_mode: record.payment_mode,
       reference_no: record.reference_no,
@@ -210,7 +218,11 @@ export function VendorPaymentsPage() {
       >
         <Form form={form} layout="vertical" size="middle">
           <Form.Item name="company_id" label="Company" rules={[{ required: true, message: "Company is required" }]}>
-            <Select placeholder="Select company" options={companies.map((c) => ({ value: c.id, label: c.name }))} />
+            <Select
+              placeholder="Select company"
+              options={companies.map((c) => ({ value: c.id, label: c.name }))}
+              onChange={() => form.setFieldsValue({ account_id: undefined })}
+            />
           </Form.Item>
           <Form.Item name="vendor_id" label="Vendor" rules={[{ required: true, message: "Vendor is required" }]}>
             <Select
@@ -235,6 +247,9 @@ export function VendorPaymentsPage() {
           </Form.Item>
           <Form.Item name="payment_mode" label="Payment Mode" rules={[{ required: true }]}>
             <Select options={PAYMENT_MODE_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="account_id" label="Paid From (Account)">
+            <Select allowClear placeholder="Select account" options={accountOptions} />
           </Form.Item>
           <Form.Item name="reference_no" label="Reference No (Cheque/Transaction No)">
             <Input />

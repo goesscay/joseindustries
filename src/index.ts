@@ -18,6 +18,8 @@ import { vendorsRouter } from "./routes/vendors";
 import { expenseCategoriesRouter } from "./routes/expenseCategories";
 import { expensesRouter } from "./routes/expenses";
 import { vendorPaymentsRouter } from "./routes/vendorPayments";
+import { accountsRouter } from "./routes/accounts";
+import { journalEntriesRouter, accountTransfersRouter } from "./routes/journalEntries";
 
 dotenv.config();
 
@@ -44,6 +46,9 @@ app.use("/api/vendors", vendorsRouter);
 app.use("/api/expense-categories", expenseCategoriesRouter);
 app.use("/api/expenses", expensesRouter);
 app.use("/api/vendor-payments", vendorPaymentsRouter);
+app.use("/api/accounts", accountsRouter);
+app.use("/api/journal-entries", journalEntriesRouter);
+app.use("/api/account-transfers", accountTransfersRouter);
 
 app.use(express.static(clientDistPath));
 

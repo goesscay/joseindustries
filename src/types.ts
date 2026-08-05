@@ -139,6 +139,7 @@ export interface Receipt {
   company_id: number;
   customer_id: number;
   tax_invoice_id: number | null;
+  account_id: number | null;
   amount: string;
   payment_mode: PaymentMode;
   reference_no: string | null;
@@ -195,6 +196,7 @@ export interface VendorPayment {
   company_id: number;
   vendor_id: number;
   expense_id: number | null;
+  account_id: number | null;
   amount: string;
   payment_mode: PaymentMode;
   reference_no: string | null;
@@ -203,6 +205,52 @@ export interface VendorPayment {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AccountType = "cash" | "bank";
+
+export interface Account {
+  id: number;
+  company_id: number;
+  name: string;
+  account_type: AccountType;
+  bank_name: string | null;
+  account_number: string | null;
+  ifsc: string | null;
+  opening_balance: string;
+  is_active: boolean | number;
+  created_at: string;
+  updated_at: string;
+  /** Only present on the list endpoint - opening_balance plus every posted movement. */
+  balance?: number;
+}
+
+export type JournalDirection = "in" | "out";
+
+export interface JournalEntry {
+  id: number;
+  account_id: number;
+  entry_date: string;
+  direction: JournalDirection;
+  amount: string;
+  particulars: string;
+  notes: string | null;
+  transfer_group: string | null;
+  created_by: number | null;
+  created_at: string;
+}
+
+/** One row in an account's ledger view - a Receipt, Vendor Payment, or
+ * Journal Entry normalized to a common shape, with a running balance. */
+export interface LedgerEntry {
+  id: number;
+  source_type: "receipt" | "vendor_payment" | "journal_entry";
+  source_id: number;
+  entry_date: string;
+  direction: JournalDirection;
+  amount: number;
+  particulars: string;
+  running_balance: number;
 }
 
 declare global {

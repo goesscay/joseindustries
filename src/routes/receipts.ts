@@ -58,7 +58,7 @@ receiptsRouter.get(
 );
 
 async function validatePayload(body: any) {
-  const { company_id, customer_id, tax_invoice_id, amount, payment_mode, received_date } = body ?? {};
+  const { company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, received_date } = body ?? {};
 
   if (!company_id || !customer_id || !amount || !payment_mode || !received_date) {
     return { error: "company_id, customer_id, amount, payment_mode and received_date are required" };
@@ -91,6 +91,15 @@ async function validatePayload(body: any) {
     }
   }
 
+  if (account_id) {
+    const [accountRows] = await pool.query<any[]>("SELECT id, company_id FROM accounts WHERE id = ?", [account_id]);
+    const account = accountRows[0];
+    if (!account) return { error: "Account not found" };
+    if (account.company_id !== Number(company_id)) {
+      return { error: "Selected account does not belong to this company" };
+    }
+  }
+
   return { company, customer, invoice };
 }
 
@@ -101,20 +110,21 @@ receiptsRouter.post(
     if ("error" in result) return res.status(400).json({ message: result.error });
     const { company } = result;
 
-    const { customer_id, tax_invoice_id, amount, payment_mode, reference_no, received_date, notes } = req.body;
+    const { customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes } = req.body;
 
     const { docNumber, financialYear } = await getNextDocNumber("receipt", company!.code, new Date(received_date));
 
     const [insertResult] = await pool.query<any>(
       `INSERT INTO receipts
-         (receipt_no, financial_year, company_id, customer_id, tax_invoice_id, amount, payment_mode, reference_no, received_date, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (receipt_no, financial_year, company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         docNumber,
         financialYear,
         req.body.company_id,
         customer_id,
         tax_invoice_id || null,
+        account_id || null,
         amount,
         payment_mode,
         reference_no || null,
@@ -139,14 +149,26 @@ receiptsRouter.put(
     const result = await validatePayload(req.body);
     if ("error" in result) return res.status(400).json({ message: result.error });
 
-    const { company_id, customer_id, tax_invoice_id, amount, payment_mode, reference_no, received_date, notes } = req.body;
+    const { company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes } =
+      req.body;
 
     await pool.query(
       `UPDATE receipts SET
-         company_id = ?, customer_id = ?, tax_invoice_id = ?, amount = ?, payment_mode = ?,
+         company_id = ?, customer_id = ?, tax_invoice_id = ?, account_id = ?, amount = ?, payment_mode = ?,
          reference_no = ?, received_date = ?, notes = ?
        WHERE id = ?`,
-      [company_id, customer_id, tax_invoice_id || null, amount, payment_mode, reference_no || null, received_date, notes || null, id]
+      [
+        company_id,
+        customer_id,
+        tax_invoice_id || null,
+        account_id || null,
+        amount,
+        payment_mode,
+        reference_no || null,
+        received_date,
+        notes || null,
+        id,
+      ]
     );
 
     const updated = await findById(id);

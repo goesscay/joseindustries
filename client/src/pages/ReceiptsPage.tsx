@@ -18,7 +18,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined } from "@an
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Company, Customer, PaymentMode, Receipt, SalesDocument } from "../types";
+import { Account, Company, Customer, PaymentMode, Receipt, SalesDocument } from "../types";
 
 const PAGE_SIZE = 10;
 
@@ -42,6 +42,7 @@ export function ReceiptsPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [invoices, setInvoices] = useState<SalesDocument[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Receipt | null>(null);
@@ -50,6 +51,7 @@ export function ReceiptsPage() {
 
   const canDelete = user?.role === "super_admin" || user?.role === "admin";
   const selectedCustomerId = Form.useWatch("customer_id", form);
+  const selectedCompanyId = Form.useWatch("company_id", form);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -77,6 +79,7 @@ export function ReceiptsPage() {
       .get<{ data: SalesDocument[] }>("/tax-invoices?perPage=200")
       .then((res) => setInvoices(res.data))
       .catch(() => {});
+    api.get<{ data: Account[] }>("/accounts").then((res) => setAccounts(res.data)).catch(() => {});
   }, []);
 
   const invoiceOptions = invoices
@@ -85,6 +88,10 @@ export function ReceiptsPage() {
       const balance = Number(inv.grand_total) - Number(inv.paid_amount ?? 0);
       return { value: inv.id, label: `${inv.doc_number} - Balance Rs. ${balance.toFixed(2)}` };
     });
+
+  const accountOptions = accounts
+    .filter((a) => !selectedCompanyId || a.company_id === selectedCompanyId)
+    .map((a) => ({ value: a.id, label: a.name }));
 
   function openCreate() {
     setEditing(null);
@@ -103,6 +110,7 @@ export function ReceiptsPage() {
       company_id: record.company_id,
       customer_id: record.customer_id,
       tax_invoice_id: record.tax_invoice_id,
+      account_id: record.account_id,
       amount: Number(record.amount),
       payment_mode: record.payment_mode,
       reference_no: record.reference_no,
@@ -231,7 +239,11 @@ export function ReceiptsPage() {
       >
         <Form form={form} layout="vertical" size="middle">
           <Form.Item name="company_id" label="Company" rules={[{ required: true, message: "Company is required" }]}>
-            <Select placeholder="Select company" options={companies.map((c) => ({ value: c.id, label: c.name }))} />
+            <Select
+              placeholder="Select company"
+              options={companies.map((c) => ({ value: c.id, label: c.name }))}
+              onChange={() => form.setFieldsValue({ account_id: undefined })}
+            />
           </Form.Item>
           <Form.Item name="customer_id" label="Customer" rules={[{ required: true, message: "Customer is required" }]}>
             <Select
@@ -250,6 +262,9 @@ export function ReceiptsPage() {
           </Form.Item>
           <Form.Item name="payment_mode" label="Payment Mode" rules={[{ required: true }]}>
             <Select options={PAYMENT_MODE_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="account_id" label="Deposited To (Account)">
+            <Select allowClear placeholder="Select account" options={accountOptions} />
           </Form.Item>
           <Form.Item name="reference_no" label="Reference No (Cheque/Transaction No)">
             <Input />
