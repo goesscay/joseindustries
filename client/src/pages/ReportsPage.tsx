@@ -1,0 +1,505 @@
+import { useEffect, useState } from "react";
+import { Tabs, Select, DatePicker, Radio, Table, Typography, Space, Button, message, Statistic, Row, Col, Card } from "antd";
+import type { ColumnsType } from "antd/es/table";
+import dayjs, { Dayjs } from "dayjs";
+import { api } from "../api/client";
+import { Company, Customer, Vendor } from "../types";
+
+const { RangePicker } = DatePicker;
+
+function formatMoney(n: number): string {
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function useCompaniesAndParties() {
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+
+  useEffect(() => {
+    api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
+    api.get<{ data: Customer[] }>("/customers?perPage=500").then((res) => setCustomers(res.data)).catch(() => {});
+    api.get<{ data: Vendor[] }>("/vendors?perPage=500").then((res) => setVendors(res.data)).catch(() => {});
+  }, []);
+
+  return { companies, customers, vendors };
+}
+
+interface DayBookEntry {
+  entry_date: string;
+  source_type: "receipt" | "vendor_payment" | "journal_entry";
+  account_name: string;
+  direction: "in" | "out";
+  amount: number;
+  particulars: string;
+}
+
+const SOURCE_LABELS: Record<DayBookEntry["source_type"], string> = {
+  receipt: "Receipt",
+  vendor_payment: "Vendor Payment",
+  journal_entry: "Journal Entry",
+};
+
+function DayBookTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("month"), dayjs()]);
+  const [loading, setLoading] = useState(false);
+  const [entries, setEntries] = useState<DayBookEntry[]>([]);
+  const [totals, setTotals] = useState({ totalIn: 0, totalOut: 0, net: 0 });
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
+
+  async function load() {
+    if (!companyId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<{ entries: DayBookEntry[]; totalIn: number; totalOut: number; net: number }>(
+        `/reports/day-book?company_id=${companyId}&from=${range[0].format("YYYY-MM-DD")}&to=${range[1].format("YYYY-MM-DD")}`
+      );
+      setEntries(res.entries);
+      setTotals({ totalIn: res.totalIn, totalOut: res.totalOut, net: res.net });
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load day book");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, range]);
+
+  const columns: ColumnsType<DayBookEntry> = [
+    { title: "Date", dataIndex: "entry_date", key: "entry_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
+    { title: "Account", dataIndex: "account_name", key: "account_name" },
+    { title: "Type", dataIndex: "source_type", key: "source_type", render: (v: DayBookEntry["source_type"]) => SOURCE_LABELS[v] },
+    { title: "Particulars", dataIndex: "particulars", key: "particulars" },
+    { title: "In", key: "in", align: "right", render: (_, r) => (r.direction === "in" ? formatMoney(r.amount) : "") },
+    { title: "Out", key: "out", align: "right", render: (_, r) => (r.direction === "out" ? formatMoney(r.amount) : "") },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="Company"
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <RangePicker
+          value={range}
+          format="DD MMM YYYY"
+          onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
+          allowClear={false}
+        />
+      </Space>
+
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={8}>
+          <Card size="small">
+            <Statistic title="Total In" value={totals.totalIn} precision={2} prefix="Rs." />
+          </Card>
+        </Col>
+        <Col xs={8}>
+          <Card size="small">
+            <Statistic title="Total Out" value={totals.totalOut} precision={2} prefix="Rs." />
+          </Card>
+        </Col>
+        <Col xs={8}>
+          <Card size="small">
+            <Statistic
+              title="Net"
+              value={totals.net}
+              precision={2}
+              prefix="Rs."
+              valueStyle={{ color: totals.net >= 0 ? "#3f8600" : "#cf1322" }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Table rowKey={(_, i) => String(i)} columns={columns} dataSource={entries} loading={loading} size="small" pagination={false} scroll={{ x: 700 }} />
+    </div>
+  );
+}
+
+interface PartyLedgerEntry {
+  entry_date: string;
+  doc_number: string;
+  description: string;
+  debit: number;
+  credit: number;
+  balance: number;
+}
+
+function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors: Vendor[] }) {
+  const [partyType, setPartyType] = useState<"customer" | "vendor">("customer");
+  const [partyId, setPartyId] = useState<number | undefined>();
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
+  const [loading, setLoading] = useState(false);
+  const [openingBalance, setOpeningBalance] = useState(0);
+  const [closingBalance, setClosingBalance] = useState(0);
+  const [entries, setEntries] = useState<PartyLedgerEntry[]>([]);
+
+  useEffect(() => {
+    setPartyId(undefined);
+  }, [partyType]);
+
+  async function load() {
+    if (!partyId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<{ openingBalance: number; entries: PartyLedgerEntry[]; closingBalance: number }>(
+        `/reports/party-ledger?type=${partyType}&id=${partyId}&from=${range[0].format("YYYY-MM-DD")}&to=${range[1].format("YYYY-MM-DD")}`
+      );
+      setOpeningBalance(res.openingBalance);
+      setEntries(res.entries);
+      setClosingBalance(res.closingBalance);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load party ledger");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partyId, range]);
+
+  const partyOptions =
+    partyType === "customer" ? customers.map((c) => ({ value: c.id, label: c.name })) : vendors.map((v) => ({ value: v.id, label: v.name }));
+
+  const columns: ColumnsType<PartyLedgerEntry> = [
+    { title: "Date", dataIndex: "entry_date", key: "entry_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
+    { title: "No.", dataIndex: "doc_number", key: "doc_number" },
+    { title: "Description", dataIndex: "description", key: "description" },
+    { title: "Debit", dataIndex: "debit", key: "debit", align: "right", render: (v: number) => (v ? formatMoney(v) : "") },
+    { title: "Credit", dataIndex: "credit", key: "credit", align: "right", render: (v: number) => (v ? formatMoney(v) : "") },
+    { title: "Balance", dataIndex: "balance", key: "balance", align: "right", render: (v: number) => formatMoney(v) },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Radio.Group value={partyType} onChange={(e) => setPartyType(e.target.value)}>
+          <Radio.Button value="customer">Customer</Radio.Button>
+          <Radio.Button value="vendor">Vendor</Radio.Button>
+        </Radio.Group>
+        <Select
+          placeholder={`Select ${partyType}`}
+          style={{ width: 240 }}
+          value={partyId}
+          showSearch
+          options={partyOptions}
+          filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+          onChange={setPartyId}
+        />
+        <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+      </Space>
+
+      {partyId && (
+        <>
+          <Typography.Text>Opening Balance: Rs. {formatMoney(openingBalance)}</Typography.Text>
+          <br />
+          <Typography.Text strong>
+            Closing Balance: Rs. {formatMoney(closingBalance)} {closingBalance > 0.01 ? `(${partyType === "customer" ? "receivable" : "payable"})` : ""}
+          </Typography.Text>
+          <Table
+            rowKey={(_, i) => String(i)}
+            columns={columns}
+            dataSource={entries}
+            loading={loading}
+            size="small"
+            pagination={false}
+            scroll={{ x: 600 }}
+            style={{ marginTop: 12 }}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProfitLossTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<{ revenue: number; expensesByCategory: { category: string; amount: number }[]; totalExpenses: number; netProfit: number } | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ from: range[0].format("YYYY-MM-DD"), to: range[1].format("YYYY-MM-DD") });
+      if (companyId) params.set("company_id", String(companyId));
+      const res = await api.get<typeof data>(`/reports/profit-loss?${params.toString()}`);
+      setData(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load profit & loss");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, range]);
+
+  const columns: ColumnsType<{ category: string; amount: number }> = [
+    { title: "Category", dataIndex: "category", key: "category" },
+    { title: "Amount", dataIndex: "amount", key: "amount", align: "right", render: (v: number) => `Rs. ${formatMoney(v)}` },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="All Companies"
+          allowClear
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+      </Space>
+
+      {data && (
+        <>
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col xs={8}>
+              <Card size="small">
+                <Statistic title="Revenue (excl. GST)" value={data.revenue} precision={2} prefix="Rs." valueStyle={{ color: "#3f8600" }} />
+              </Card>
+            </Col>
+            <Col xs={8}>
+              <Card size="small">
+                <Statistic title="Total Expenses (excl. GST)" value={data.totalExpenses} precision={2} prefix="Rs." valueStyle={{ color: "#cf1322" }} />
+              </Card>
+            </Col>
+            <Col xs={8}>
+              <Card size="small">
+                <Statistic
+                  title="Net Profit"
+                  value={data.netProfit}
+                  precision={2}
+                  prefix="Rs."
+                  valueStyle={{ color: data.netProfit >= 0 ? "#3f8600" : "#cf1322" }}
+                />
+              </Card>
+            </Col>
+          </Row>
+          <Typography.Title level={5}>Expenses by Category</Typography.Title>
+          <Table
+            rowKey="category"
+            columns={columns}
+            dataSource={data.expensesByCategory}
+            loading={loading}
+            size="small"
+            pagination={false}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function GstSummaryTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("month"), dayjs()]);
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<{ outputCgst: number; outputSgst: number; outputIgst: number; outputTotal: number; inputGst: number; netPayable: number } | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ from: range[0].format("YYYY-MM-DD"), to: range[1].format("YYYY-MM-DD") });
+      if (companyId) params.set("company_id", String(companyId));
+      const res = await api.get<typeof data>(`/reports/gst-summary?${params.toString()}`);
+      setData(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load GST summary");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, range]);
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="All Companies"
+          allowClear
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+      </Space>
+
+      {data && (
+        <Row gutter={16}>
+          <Col xs={12} md={6}>
+            <Card size="small" loading={loading}>
+              <Statistic title="Output CGST" value={data.outputCgst} precision={2} prefix="Rs." />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small" loading={loading}>
+              <Statistic title="Output SGST" value={data.outputSgst} precision={2} prefix="Rs." />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small" loading={loading}>
+              <Statistic title="Output IGST" value={data.outputIgst} precision={2} prefix="Rs." />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small" loading={loading}>
+              <Statistic title="Output GST Total" value={data.outputTotal} precision={2} prefix="Rs." />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small" loading={loading}>
+              <Statistic title="Input GST (Expenses)" value={data.inputGst} precision={2} prefix="Rs." />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small" loading={loading}>
+              <Statistic
+                title="Net GST Payable"
+                value={data.netPayable}
+                precision={2}
+                prefix="Rs."
+                valueStyle={{ color: data.netPayable >= 0 ? "#cf1322" : "#3f8600" }}
+              />
+            </Card>
+          </Col>
+        </Row>
+      )}
+    </div>
+  );
+}
+
+interface OutstandingRow {
+  id: number;
+  doc_number: string;
+  party_name: string;
+  date: string;
+  total: number;
+  paid: number;
+  balance: number;
+}
+
+function OutstandingTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [loading, setLoading] = useState(false);
+  const [receivables, setReceivables] = useState<OutstandingRow[]>([]);
+  const [payables, setPayables] = useState<OutstandingRow[]>([]);
+  const [totalReceivable, setTotalReceivable] = useState(0);
+  const [totalPayable, setTotalPayable] = useState(0);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (companyId) params.set("company_id", String(companyId));
+      const res = await api.get<{ receivables: OutstandingRow[]; totalReceivable: number; payables: OutstandingRow[]; totalPayable: number }>(
+        `/reports/outstanding?${params.toString()}`
+      );
+      setReceivables(res.receivables);
+      setPayables(res.payables);
+      setTotalReceivable(res.totalReceivable);
+      setTotalPayable(res.totalPayable);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load outstanding report");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId]);
+
+  const columns: ColumnsType<OutstandingRow> = [
+    { title: "No.", dataIndex: "doc_number", key: "doc_number" },
+    { title: "Party", dataIndex: "party_name", key: "party_name" },
+    { title: "Date", dataIndex: "date", key: "date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
+    { title: "Total", dataIndex: "total", key: "total", align: "right", render: (v: number) => formatMoney(v) },
+    { title: "Paid", dataIndex: "paid", key: "paid", align: "right", render: (v: number) => formatMoney(v) },
+    { title: "Balance", dataIndex: "balance", key: "balance", align: "right", render: (v: number) => <b>{formatMoney(v)}</b> },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="All Companies"
+          allowClear
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <Button onClick={load}>Refresh</Button>
+      </Space>
+
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={12}>
+          <Card size="small">
+            <Statistic title="Total Receivable" value={totalReceivable} precision={2} prefix="Rs." valueStyle={{ color: "#3f8600" }} />
+          </Card>
+        </Col>
+        <Col xs={12}>
+          <Card size="small">
+            <Statistic title="Total Payable" value={totalPayable} precision={2} prefix="Rs." valueStyle={{ color: "#cf1322" }} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Typography.Title level={5}>Outstanding Receivables (unpaid Tax Invoices)</Typography.Title>
+      <Table rowKey="id" columns={columns} dataSource={receivables} loading={loading} size="small" pagination={false} scroll={{ x: 600 }} />
+
+      <Typography.Title level={5} style={{ marginTop: 24 }}>
+        Outstanding Payables (unpaid Expenses)
+      </Typography.Title>
+      <Table rowKey="id" columns={columns} dataSource={payables} loading={loading} size="small" pagination={false} scroll={{ x: 600 }} />
+    </div>
+  );
+}
+
+export function ReportsPage() {
+  const { companies, customers, vendors } = useCompaniesAndParties();
+
+  return (
+    <div>
+      <Typography.Title level={4} style={{ marginBottom: 16 }}>
+        Reports
+      </Typography.Title>
+      <Tabs
+        defaultActiveKey="day-book"
+        items={[
+          { key: "day-book", label: "Day Book", children: <DayBookTab companies={companies} /> },
+          { key: "party-ledger", label: "Party Ledger", children: <PartyLedgerTab customers={customers} vendors={vendors} /> },
+          { key: "profit-loss", label: "Profit & Loss", children: <ProfitLossTab companies={companies} /> },
+          { key: "gst-summary", label: "GST Summary", children: <GstSummaryTab companies={companies} /> },
+          { key: "outstanding", label: "Outstanding", children: <OutstandingTab companies={companies} /> },
+        ]}
+      />
+    </div>
+  );
+}
