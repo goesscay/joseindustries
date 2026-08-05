@@ -115,8 +115,10 @@ Phase 3 adds **Tax Invoice** and **Receipts**:
 
 ## Local development
 
-Requirements: Node.js 18+, a MySQL server reachable from your machine (local, or a remote one
-with your IP allowed via a remote-connection rule).
+Requirements: Node.js 18+, a **MariaDB** server reachable from your machine (local, or a remote
+one with your IP allowed via a remote-connection rule). Use MariaDB specifically, not vanilla
+MySQL - production runs on Hostinger's MariaDB, and `src/db/schema.sql`'s idempotent migrations
+rely on MariaDB's `ADD COLUMN IF NOT EXISTS` extension, which MySQL doesn't support at all.
 
 ```bash
 cp .env.example .env      # fill in DB_*, JWT_SECRET
