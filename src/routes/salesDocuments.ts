@@ -3,7 +3,7 @@ import { pool } from "../config/db";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
-import { computeTotals } from "../utils/totals";
+import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
 import { Company, Customer, DocType, DocumentItem, DocumentRecord, Role } from "../types";
@@ -15,22 +15,12 @@ export interface SalesDocumentRouterOptions {
   includePaymentSummary?: boolean;
 }
 
-interface LineItemInput {
-  item_id: number | null;
-  description: string;
-  hsn_code: string | null;
-  qty: number;
-  unit: string;
-  rate: number;
-  tax_rate: number;
-}
-
 class ValidationError extends Error {
   status = 400;
 }
 
-// Optional Tally-style reference fields carried on the document, all nullable.
-const OPTIONAL_FIELDS = [
+// Optional Tally-style reference fields carried on the document, all nullable strings.
+const OPTIONAL_TEXT_FIELDS = [
   "consignee_name",
   "consignee_address",
   "consignee_gstin",
@@ -50,17 +40,26 @@ const OPTIONAL_FIELDS = [
   "mode_terms_of_payment",
   "other_reference",
   "supplier_reference",
+  "due_date",
+  "credit_period",
 ] as const;
 
-function pickOptionalFields(body: any): Record<string, string | null> {
+function pickOptionalTextFields(body: any): Record<string, string | null> {
   const result: Record<string, string | null> = {};
-  for (const field of OPTIONAL_FIELDS) {
+  for (const field of OPTIONAL_TEXT_FIELDS) {
     result[field] = body[field] || null;
   }
   return result;
 }
 
-function validateAndNormalizeLines(rawItems: unknown): LineItemInput[] {
+interface NormalizedLine extends LineInput {
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  unit: string;
+}
+
+function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ValidationError("At least one line item is required");
   }
@@ -68,8 +67,12 @@ function validateAndNormalizeLines(rawItems: unknown): LineItemInput[] {
     const qty = Number(raw.qty);
     const rate = Number(raw.rate);
     const tax_rate = Number(raw.tax_rate ?? 0);
+    const discount_percent = Number(raw.discount_percent ?? 0);
     if (!raw.description || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(rate) || rate < 0) {
       throw new ValidationError("Each line item needs a description, positive qty, and rate");
+    }
+    if (!Number.isFinite(discount_percent) || discount_percent < 0 || discount_percent > 100) {
+      throw new ValidationError("Discount % must be between 0 and 100");
     }
     return {
       item_id: raw.item_id ?? null,
@@ -78,6 +81,7 @@ function validateAndNormalizeLines(rawItems: unknown): LineItemInput[] {
       qty,
       unit: raw.unit || "pcs",
       rate,
+      discount_percent,
       tax_rate,
     };
   });
@@ -165,7 +169,8 @@ export function createSalesDocumentRouter(
     "/",
     ...createGuard,
     asyncHandler(async (req, res) => {
-      const { company_id, customer_id, issue_date, notes, items, converted_from_id } = req.body ?? {};
+      const { company_id, customer_id, issue_date, notes, items, converted_from_id, reverse_charge, freight_charges, installation_charges } =
+        req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
       }
@@ -185,7 +190,7 @@ export function createSalesDocumentRouter(
         convertedFromId = Number(converted_from_id);
       }
 
-      let lines: LineItemInput[];
+      let lines;
       try {
         lines = validateAndNormalizeLines(items);
       } catch (err) {
@@ -193,10 +198,13 @@ export function createSalesDocumentRouter(
         throw err;
       }
 
-      const { subtotal, grandTotal } = computeTotals(lines);
+      const freightCharges = Number(freight_charges) || 0;
+      const installationCharges = Number(installation_charges) || 0;
+      const { subtotal, discountAmount, freightCharges: freight, installationCharges: installation, roundOff, grandTotal } =
+        computeTotals(lines, { freightCharges, installationCharges });
       const { isInterState, cgstTotal, sgstTotal, igstTotal } = computeGstSplit(lines, company.state, customer.state);
       const taxTotal = isInterState ? igstTotal : cgstTotal + sgstTotal;
-      const optionalFields = pickOptionalFields(req.body ?? {});
+      const optionalFields = pickOptionalTextFields(req.body ?? {});
 
       const { docNumber, financialYear } = await getNextDocNumber(docType, company.code, new Date(issue_date));
 
@@ -211,13 +219,17 @@ export function createSalesDocumentRouter(
               buyers_order_no, buyers_order_date, dispatch_doc_no, dispatched_through,
               destination, terms_of_delivery, delivery_note, delivery_note_date,
               mode_terms_of_payment, other_reference, supplier_reference,
-              subtotal, cgst_total, sgst_total, igst_total, tax_total, grand_total, created_by)
+              due_date, credit_period, reverse_charge,
+              subtotal, discount_amount, freight_charges, installation_charges,
+              cgst_total, sgst_total, igst_total, tax_total, round_off, grand_total, created_by)
            VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?,
+                   ?, ?, ?,
+                   ?, ?, ?, ?,
                    ?, ?, ?, ?, ?, ?, ?)`,
           [
             docType,
@@ -247,11 +259,18 @@ export function createSalesDocumentRouter(
             optionalFields.mode_terms_of_payment,
             optionalFields.other_reference,
             optionalFields.supplier_reference,
+            optionalFields.due_date,
+            optionalFields.credit_period,
+            reverse_charge ? 1 : 0,
             subtotal,
+            discountAmount,
+            freight,
+            installation,
             cgstTotal,
             sgstTotal,
             igstTotal,
             taxTotal,
+            roundOff,
             grandTotal,
             req.user!.sub,
           ]
@@ -259,11 +278,11 @@ export function createSalesDocumentRouter(
         const documentId = result.insertId;
 
         for (const [index, line] of lines.entries()) {
-          const lineTotal = Math.round(line.qty * line.rate * 100) / 100;
+          const { lineTotal } = computeLine(line);
           await conn.query(
             `INSERT INTO document_items
-               (document_id, item_id, description, hsn_code, qty, unit, rate, tax_rate, line_total, sort_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (document_id, item_id, description, hsn_code, qty, unit, rate, discount_percent, tax_rate, line_total, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               documentId,
               line.item_id,
@@ -272,6 +291,7 @@ export function createSalesDocumentRouter(
               line.qty,
               line.unit,
               line.rate,
+              line.discount_percent,
               line.tax_rate,
               lineTotal,
               index,
@@ -303,7 +323,7 @@ export function createSalesDocumentRouter(
         return res.status(400).json({ message: `Cannot edit a cancelled ${title.toLowerCase()}` });
       }
 
-      const { company_id, customer_id, issue_date, notes, items } = req.body ?? {};
+      const { company_id, customer_id, issue_date, notes, items, reverse_charge, freight_charges, installation_charges } = req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
       }
@@ -316,7 +336,7 @@ export function createSalesDocumentRouter(
       const customer = customerRows[0] as Customer | undefined;
       if (!customer) return res.status(404).json({ message: "Customer not found" });
 
-      let lines: LineItemInput[];
+      let lines;
       try {
         lines = validateAndNormalizeLines(items);
       } catch (err) {
@@ -324,10 +344,13 @@ export function createSalesDocumentRouter(
         throw err;
       }
 
-      const { subtotal, grandTotal } = computeTotals(lines);
+      const freightCharges = Number(freight_charges) || 0;
+      const installationCharges = Number(installation_charges) || 0;
+      const { subtotal, discountAmount, freightCharges: freight, installationCharges: installation, roundOff, grandTotal } =
+        computeTotals(lines, { freightCharges, installationCharges });
       const { isInterState, cgstTotal, sgstTotal, igstTotal } = computeGstSplit(lines, company.state, customer.state);
       const taxTotal = isInterState ? igstTotal : cgstTotal + sgstTotal;
-      const optionalFields = pickOptionalFields(req.body ?? {});
+      const optionalFields = pickOptionalTextFields(req.body ?? {});
 
       const conn = await pool.getConnection();
       try {
@@ -340,7 +363,9 @@ export function createSalesDocumentRouter(
              buyers_order_no = ?, buyers_order_date = ?, dispatch_doc_no = ?, dispatched_through = ?,
              destination = ?, terms_of_delivery = ?, delivery_note = ?, delivery_note_date = ?,
              mode_terms_of_payment = ?, other_reference = ?, supplier_reference = ?,
-             subtotal = ?, cgst_total = ?, sgst_total = ?, igst_total = ?, tax_total = ?, grand_total = ?
+             due_date = ?, credit_period = ?, reverse_charge = ?,
+             subtotal = ?, discount_amount = ?, freight_charges = ?, installation_charges = ?,
+             cgst_total = ?, sgst_total = ?, igst_total = ?, tax_total = ?, round_off = ?, grand_total = ?
            WHERE id = ?`,
           [
             company_id,
@@ -366,23 +391,42 @@ export function createSalesDocumentRouter(
             optionalFields.mode_terms_of_payment,
             optionalFields.other_reference,
             optionalFields.supplier_reference,
+            optionalFields.due_date,
+            optionalFields.credit_period,
+            reverse_charge ? 1 : 0,
             subtotal,
+            discountAmount,
+            freight,
+            installation,
             cgstTotal,
             sgstTotal,
             igstTotal,
             taxTotal,
+            roundOff,
             grandTotal,
             id,
           ]
         );
         await conn.query("DELETE FROM document_items WHERE document_id = ?", [id]);
         for (const [index, line] of lines.entries()) {
-          const lineTotal = Math.round(line.qty * line.rate * 100) / 100;
+          const { lineTotal } = computeLine(line);
           await conn.query(
             `INSERT INTO document_items
-               (document_id, item_id, description, hsn_code, qty, unit, rate, tax_rate, line_total, sort_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, line.item_id, line.description, line.hsn_code, line.qty, line.unit, line.rate, line.tax_rate, lineTotal, index]
+               (document_id, item_id, description, hsn_code, qty, unit, rate, discount_percent, tax_rate, line_total, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              id,
+              line.item_id,
+              line.description,
+              line.hsn_code,
+              line.qty,
+              line.unit,
+              line.rate,
+              line.discount_percent,
+              line.tax_rate,
+              lineTotal,
+              index,
+            ]
           );
         }
         await conn.commit();
@@ -452,6 +496,7 @@ export function createSalesDocumentRouter(
           ...i,
           qty: Number(i.qty),
           rate: Number(i.rate),
+          discount_percent: Number(i.discount_percent),
           tax_rate: Number(i.tax_rate),
           line_total: Number(i.line_total),
         })),

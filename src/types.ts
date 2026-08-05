@@ -72,6 +72,7 @@ export interface DocumentItem {
   qty: number;
   unit: string;
   rate: number;
+  discount_percent: number;
   tax_rate: number;
   line_total: number;
 }
@@ -109,11 +110,19 @@ export interface DocumentRecord {
   other_reference: string | null;
   supplier_reference: string | null;
 
+  due_date: string | null;
+  credit_period: string | null;
+  reverse_charge: boolean | number;
+
   subtotal: string;
+  discount_amount: string;
+  freight_charges: string;
+  installation_charges: string;
   cgst_total: string;
   sgst_total: string;
   igst_total: string;
   tax_total: string;
+  round_off: string;
   grand_total: string;
 
   created_by: number | null;

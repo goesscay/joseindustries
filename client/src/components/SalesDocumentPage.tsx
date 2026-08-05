@@ -18,6 +18,7 @@ import {
   Typography,
   Tag,
   Dropdown,
+  Switch,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, SwapOutlined } from "@ant-design/icons";
@@ -46,7 +47,11 @@ const STATUS_COLORS: Record<DocStatus, string> = {
 
 // Optional Tally-style fields whose form values are dayjs objects, needing
 // YYYY-MM-DD serialization on submit and dayjs parsing on load.
-const OPTIONAL_DATE_FIELDS = ["delivery_note_date", "buyers_order_date", "date_of_supply"];
+const OPTIONAL_DATE_FIELDS = ["delivery_note_date", "buyers_order_date", "date_of_supply", "due_date"];
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 export interface ConvertTarget {
   apiPath: string;
@@ -99,6 +104,8 @@ export function SalesDocumentPage({
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const lineItems = Form.useWatch("items", form) as DocumentLineItem[] | undefined;
+  const freightWatch = Form.useWatch("freight_charges", form) as number | undefined;
+  const installationWatch = Form.useWatch("installation_charges", form) as number | undefined;
 
   const canDelete = user?.role === "super_admin" || user?.role === "admin";
   const availableConvertTargets = (convertTargets ?? []).filter(
@@ -132,17 +139,30 @@ export function SalesDocumentPage({
 
   const totals = useMemo(() => {
     let subtotal = 0;
+    let discountAmount = 0;
     let tax = 0;
     (lineItems || []).forEach((line) => {
       const qty = Number(line?.qty) || 0;
       const rate = Number(line?.rate) || 0;
+      const discountPercent = Number(line?.discount_percent) || 0;
       const taxRate = Number(line?.tax_rate) || 0;
-      const base = qty * rate;
-      subtotal += base;
-      tax += (base * taxRate) / 100;
+      const base = round2(qty * rate);
+      const discount = round2((base * discountPercent) / 100);
+      const taxable = round2(base - discount);
+      subtotal += taxable;
+      discountAmount += discount;
+      tax += round2((taxable * taxRate) / 100);
     });
-    return { subtotal, tax, grand: subtotal + tax };
-  }, [lineItems]);
+    subtotal = round2(subtotal);
+    discountAmount = round2(discountAmount);
+    tax = round2(tax);
+    const freight = round2(Number(freightWatch) || 0);
+    const installation = round2(Number(installationWatch) || 0);
+    const raw = subtotal + tax + freight + installation;
+    const grand = Math.round(raw);
+    const roundOff = round2(grand - raw);
+    return { subtotal, discountAmount, tax, freight, installation, roundOff, grand };
+  }, [lineItems, freightWatch, installationWatch]);
 
   function openCreate() {
     setEditingDoc(null);
@@ -152,7 +172,12 @@ export function SalesDocumentPage({
     form.setFieldsValue({
       issue_date: dayjs(),
       company_id: companies[0]?.id,
-      items: [{ item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, tax_rate: 18 }],
+      reverse_charge: false,
+      freight_charges: 0,
+      installation_charges: 0,
+      items: [
+        { item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, discount_percent: 0, tax_rate: 18 },
+      ],
     });
     setModalOpen(true);
   }
@@ -179,6 +204,10 @@ export function SalesDocumentPage({
       mode_terms_of_payment: doc.mode_terms_of_payment,
       other_reference: doc.other_reference,
       supplier_reference: doc.supplier_reference,
+      credit_period: doc.credit_period,
+      reverse_charge: Boolean(doc.reverse_charge),
+      freight_charges: Number(doc.freight_charges) || 0,
+      installation_charges: Number(doc.installation_charges) || 0,
       items: docItems.map((i) => ({
         item_id: i.item_id,
         description: i.description,
@@ -186,6 +215,7 @@ export function SalesDocumentPage({
         qty: Number(i.qty),
         unit: i.unit,
         rate: Number(i.rate),
+        discount_percent: Number(i.discount_percent) || 0,
         tax_rate: Number(i.tax_rate),
       })),
     };
@@ -575,6 +605,39 @@ export function SalesDocumentPage({
                   </Row>
                 ),
               },
+              {
+                key: "charges",
+                label: "Invoice Terms & Charges (due date, credit period, freight, installation)",
+                children: (
+                  <Row gutter={12}>
+                    <Col xs={24} sm={6}>
+                      <Form.Item name="due_date" label="Due Date">
+                        <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={6}>
+                      <Form.Item name="credit_period" label="Credit Period">
+                        <Input placeholder="e.g. 15 Days" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={6}>
+                      <Form.Item name="freight_charges" label="Freight / Transportation">
+                        <InputNumber min={0} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={6}>
+                      <Form.Item name="installation_charges" label="Installation / Other Charges">
+                        <InputNumber min={0} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={6}>
+                      <Form.Item name="reverse_charge" label="Reverse Charge" valuePropName="checked">
+                        <Switch />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                ),
+              },
             ]}
           />
 
@@ -591,6 +654,7 @@ export function SalesDocumentPage({
                         <th style={{ width: 90 }}>HSN/SAC</th>
                         <th style={{ width: 70 }}>Qty</th>
                         <th style={{ width: 90 }}>Rate</th>
+                        <th style={{ width: 65 }}>Disc %</th>
                         <th style={{ width: 70 }}>Tax %</th>
                         <th style={{ width: 90 }}>Amount</th>
                         <th style={{ width: 32 }} />
@@ -599,7 +663,14 @@ export function SalesDocumentPage({
                     <tbody>
                       {fields.map(({ key, name }) => {
                         const line = lineItems?.[name];
-                        const lineTotal = line ? (Number(line.qty) || 0) * (Number(line.rate) || 0) : 0;
+                        let lineTotal = 0;
+                        if (line) {
+                          const base = round2((Number(line.qty) || 0) * (Number(line.rate) || 0));
+                          const discount = round2((base * (Number(line.discount_percent) || 0)) / 100);
+                          const taxable = round2(base - discount);
+                          const tax = round2((taxable * (Number(line.tax_rate) || 0)) / 100);
+                          lineTotal = round2(taxable + tax);
+                        }
                         return (
                           <tr key={key}>
                             <td>
@@ -634,6 +705,11 @@ export function SalesDocumentPage({
                             <td>
                               <Form.Item name={[name, "rate"]} style={{ marginBottom: 0 }}>
                                 <InputNumber size="small" min={0} style={{ width: "100%" }} />
+                              </Form.Item>
+                            </td>
+                            <td>
+                              <Form.Item name={[name, "discount_percent"]} style={{ marginBottom: 0 }}>
+                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
                               </Form.Item>
                             </td>
                             <td>
@@ -673,7 +749,16 @@ export function SalesDocumentPage({
                   icon={<PlusOutlined />}
                   style={{ marginTop: 8 }}
                   onClick={() =>
-                    add({ item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, tax_rate: 18 })
+                    add({
+                      item_id: null,
+                      description: "",
+                      hsn_code: "",
+                      qty: 1,
+                      unit: "pcs",
+                      rate: 0,
+                      discount_percent: 0,
+                      tax_rate: 18,
+                    })
                   }
                 >
                   Add Line
@@ -687,8 +772,12 @@ export function SalesDocumentPage({
           </Form.Item>
 
           <div style={{ textAlign: "right", borderTop: "1px solid #f0f0f0", paddingTop: 12 }}>
-            <div>Subtotal: Rs. {totals.subtotal.toFixed(2)}</div>
+            <div>Subtotal / Taxable Value: Rs. {totals.subtotal.toFixed(2)}</div>
+            {totals.discountAmount > 0 && <div>Discount: Rs. {totals.discountAmount.toFixed(2)}</div>}
             <div>Tax: Rs. {totals.tax.toFixed(2)}</div>
+            {totals.freight > 0 && <div>Freight / Transportation: Rs. {totals.freight.toFixed(2)}</div>}
+            {totals.installation > 0 && <div>Installation / Other Charges: Rs. {totals.installation.toFixed(2)}</div>}
+            {totals.roundOff !== 0 && <div>Round Off: Rs. {totals.roundOff.toFixed(2)}</div>}
             <Typography.Text strong>Grand Total: Rs. {totals.grand.toFixed(2)}</Typography.Text>
           </div>
         </Form>

@@ -106,11 +106,20 @@ CREATE TABLE IF NOT EXISTS documents (
   other_reference VARCHAR(255) NULL,
   supplier_reference VARCHAR(255) NULL,
 
+  -- Invoice-style fields matching the company's printed Tax Invoice template
+  due_date DATE NULL,
+  credit_period VARCHAR(50) NULL,
+  reverse_charge BOOLEAN NOT NULL DEFAULT FALSE,
+
   subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  freight_charges DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  installation_charges DECIMAL(12, 2) NOT NULL DEFAULT 0,
   cgst_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
   sgst_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
   igst_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
   tax_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  round_off DECIMAL(12, 2) NOT NULL DEFAULT 0,
   grand_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
 
   created_by INT UNSIGNED NULL,
@@ -132,12 +141,28 @@ CREATE TABLE IF NOT EXISTS document_items (
   qty DECIMAL(10, 2) NOT NULL DEFAULT 1,
   unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
   rate DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  discount_percent DECIMAL(5, 2) NOT NULL DEFAULT 0,
   tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0,
   line_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
   sort_order INT UNSIGNED NOT NULL DEFAULT 0,
   FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
   FOREIGN KEY (item_id) REFERENCES items(id)
 );
+
+-- Idempotent for existing databases (fresh installs already get these columns
+-- from the CREATE TABLE statements above; MariaDB/MySQL 8+ support IF NOT EXISTS
+-- on ADD COLUMN, so this block is safe to re-run on every migrate).
+ALTER TABLE documents
+  ADD COLUMN IF NOT EXISTS due_date DATE NULL,
+  ADD COLUMN IF NOT EXISTS credit_period VARCHAR(50) NULL,
+  ADD COLUMN IF NOT EXISTS reverse_charge BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS freight_charges DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS installation_charges DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS round_off DECIMAL(12, 2) NOT NULL DEFAULT 0;
+
+ALTER TABLE document_items
+  ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5, 2) NOT NULL DEFAULT 0;
 
 -- Phase 3: payments received against a Tax Invoice. Kept as its own table
 -- (rather than another `documents` row) since a receipt's shape - one payment,
