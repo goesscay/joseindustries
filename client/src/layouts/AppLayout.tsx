@@ -6,6 +6,9 @@ import {
   MenuOutlined,
   UserOutlined,
   LogoutOutlined,
+  ContactsOutlined,
+  TagsOutlined,
+  FileTextOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo-black.png";
@@ -21,10 +24,14 @@ export function AppLayout() {
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const navItems =
-    user && user.role !== "staff"
-      ? [{ key: "/users", icon: <TeamOutlined />, label: "Users" }]
-      : [];
+  const navItems = user
+    ? [
+        { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
+        { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
+        { key: "/items", icon: <TagsOutlined />, label: "Items" },
+        ...(user.role !== "staff" ? [{ key: "/users", icon: <TeamOutlined />, label: "Users" }] : []),
+      ]
+    : [];
 
   const selectedKey = navItems.find((item) => location.pathname.startsWith(item.key))?.key ?? "/";
 

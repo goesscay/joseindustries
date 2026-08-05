@@ -6,6 +6,9 @@ import dotenv from "dotenv";
 import { healthRouter } from "./routes/health";
 import { authRouter } from "./routes/auth";
 import { usersRouter } from "./routes/users";
+import { customersRouter } from "./routes/customers";
+import { itemsRouter } from "./routes/items";
+import { quotationsRouter } from "./routes/quotations";
 
 dotenv.config();
 
@@ -20,6 +23,9 @@ app.use(cookieParser());
 app.use("/api", healthRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/users", usersRouter);
+app.use("/api/customers", customersRouter);
+app.use("/api/items", itemsRouter);
+app.use("/api/quotations", quotationsRouter);
 
 app.use(express.static(clientDistPath));
 

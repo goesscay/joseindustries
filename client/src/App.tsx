@@ -4,6 +4,9 @@ import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { HomePage } from "./pages/HomePage";
 import { UsersPage } from "./pages/UsersPage";
+import { CustomersPage } from "./pages/CustomersPage";
+import { ItemsPage } from "./pages/ItemsPage";
+import { QuotationsPage } from "./pages/QuotationsPage";
 
 function App() {
   return (
@@ -12,6 +15,9 @@ function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<HomePage />} />
+          <Route path="/quotations" element={<QuotationsPage />} />
+          <Route path="/customers" element={<CustomersPage />} />
+          <Route path="/items" element={<ItemsPage />} />
           <Route element={<ProtectedRoute allowedRoles={["super_admin", "admin"]} />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>

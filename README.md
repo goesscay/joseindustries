@@ -15,13 +15,19 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 │   ├── db/migrate.ts        # Runs schema.sql against DB_* from .env
 │   ├── db/seedAdmin.ts      # Bootstraps the first super_admin user
 │   ├── middleware/auth.ts   # requireAuth / requireRole (JWT cookie)
+│   ├── services/numbering.ts       # Atomic per-type, per-FY document numbers
+│   ├── services/pdf/quotationPdf.ts
 │   ├── routes/auth.ts       # /api/auth: login, logout, me
-│   └── routes/users.ts      # /api/users: user management CRUD (RBAC)
+│   ├── routes/users.ts      # /api/users: user management CRUD (RBAC)
+│   ├── routes/customers.ts  # /api/customers
+│   ├── routes/items.ts      # /api/items: product/service catalog
+│   └── routes/quotations.ts # /api/quotations: CRUD + PDF export
 ├── client/                   # React + Vite + TypeScript frontend (Ant Design)
 │   └── src/
 │       ├── context/AuthContext.tsx
 │       ├── layouts/AppLayout.tsx   # Sidebar (desktop) / Drawer (mobile)
-│       └── pages/                 # LoginPage, HomePage, UsersPage
+│       └── pages/                 # LoginPage, HomePage, UsersPage,
+│                                   # CustomersPage, ItemsPage, QuotationsPage
 ├── dist/                     # Compiled backend (generated, gitignored)
 ├── public/                   # Built frontend assets (generated, gitignored)
 ├── .env.example              # Copy to .env for local dev
@@ -35,6 +41,25 @@ Three roles: `super_admin`, `admin`, `staff`.
 - `admin` can manage `admin` and `staff` accounts, but cannot create, edit, or view a `super_admin` account.
 - `staff` has no access to User Management.
 - The app always keeps at least one active `super_admin` — the last one can't be demoted, deactivated, or deleted.
+
+## Sales documents (Phase 1: Quotations)
+
+Replaces the Excel-based quotation/invoice process, whose shared-file editing let two people
+claim the same "next number" at once. Numbers are now issued by `getNextDocNumber()`
+(`src/services/numbering.ts`), which uses MySQL's `INSERT ... ON DUPLICATE KEY UPDATE
+LAST_INSERT_ID(expr)` trick on a single connection — the row lock that upsert takes makes
+concurrent requests serialize, so two people creating a quotation at the same instant can
+never receive the same number. Format: `QTN/25-26/0001`, resetting every financial year
+(Apr–Mar), per standard GST practice.
+
+Phase 1 covers Customers, an Items catalog, and Quotations (create/edit/list/PDF export).
+Staff and above can create Quotations/Customers/Items; deleting any of them requires
+`admin`/`super_admin`. Later phases add Proforma Invoice, Delivery Challan, Tax Invoice
+(GST-compliant, CGST/SGST vs IGST), and Receipts/payment tracking on the same `documents` /
+`document_items` tables.
+
+Set `COMPANY_NAME`, `COMPANY_ADDRESS`, `COMPANY_GSTIN`, `COMPANY_PHONE`, `COMPANY_EMAIL` in
+`.env` to control what's printed on generated PDFs.
 
 ## Local development
 
@@ -87,4 +112,6 @@ makes the one-command Hostinger deploy below work.
    `/api/health` and `/api/health/db` available for a quick check.
 
 Whenever you push new commits, re-pull in hPanel (or re-run the Git deploy), then click
-**NPM Install** and **Restart** again to rebuild and pick up the changes.
+**NPM Install** and **Restart** again to rebuild and pick up the changes. If the commit added
+or changed tables in `src/db/schema.sql`, also re-run `npm run db:migrate` (safe to run
+repeatedly — every statement is `CREATE TABLE IF NOT EXISTS`).

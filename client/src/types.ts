@@ -10,3 +10,57 @@ export interface AppUser {
   created_at: string;
   updated_at: string;
 }
+
+export interface Customer {
+  id: number;
+  name: string;
+  gstin: string | null;
+  phone: string | null;
+  email: string | null;
+  billing_address: string | null;
+  shipping_address: string | null;
+  state: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Item {
+  id: number;
+  name: string;
+  hsn_code: string | null;
+  unit: string;
+  default_rate: string;
+  tax_rate: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DocStatus = "draft" | "sent" | "accepted" | "rejected" | "cancelled";
+
+export interface DocumentLineItem {
+  id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  line_total?: number;
+}
+
+export interface Quotation {
+  id: number;
+  doc_number: string;
+  financial_year: string;
+  customer_id: number;
+  customer_name?: string;
+  status: DocStatus;
+  issue_date: string;
+  notes: string | null;
+  subtotal: string;
+  tax_total: string;
+  grand_total: string;
+  created_at: string;
+  updated_at: string;
+}
