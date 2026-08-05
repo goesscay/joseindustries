@@ -4,7 +4,7 @@ client/node_modules/
 
 # Build output
 dist/
-public/
+/public/
 client/dist/
 
 # Environment variables
