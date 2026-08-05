@@ -18,6 +18,10 @@ import { ExpensesPage } from "./pages/ExpensesPage";
 import { VendorPaymentsPage } from "./pages/VendorPaymentsPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { TaxRatesPage } from "./pages/TaxRatesPage";
+import { PaymentTermsPage } from "./pages/PaymentTermsPage";
+import { DocumentNumberingPage } from "./pages/DocumentNumberingPage";
+import { TermsConditionsPage } from "./pages/TermsConditionsPage";
 
 function App() {
   return (
@@ -40,6 +44,10 @@ function App() {
           <Route path="/expense-categories" element={<ExpenseCategoriesPage />} />
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/settings/tax-rates" element={<TaxRatesPage />} />
+          <Route path="/settings/payment-terms" element={<PaymentTermsPage />} />
+          <Route path="/settings/document-numbering" element={<DocumentNumberingPage />} />
+          <Route path="/settings/terms-conditions" element={<TermsConditionsPage />} />
           <Route element={<ProtectedRoute allowedRoles={["super_admin", "admin"]} />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>

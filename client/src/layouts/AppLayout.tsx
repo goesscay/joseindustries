@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Layout, Menu, Drawer, Grid, Dropdown, Avatar, Space, Typography } from "antd";
+import type { MenuProps } from "antd";
 import {
+  HomeOutlined,
   TeamOutlined,
   MenuOutlined,
   UserOutlined,
@@ -20,12 +22,29 @@ import {
   MoneyCollectOutlined,
   CreditCardOutlined,
   BarChartOutlined,
+  ShoppingCartOutlined,
+  DollarOutlined,
+  SettingOutlined,
+  PercentageOutlined,
+  NumberOutlined,
+  FileProtectOutlined,
+  SafetyOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo-black.png";
 
 const { Header, Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
+
+type NavItem = Required<MenuProps>["items"][number];
+
+// Menu item keys must be unique across the whole tree, but "Bank Accounts"
+// under Settings is deliberately a shortcut to the same page as "Bank &
+// Cash" under Banking - give it its own key and resolve it to the real
+// route on click instead of reusing "/accounts" twice.
+const KEY_ALIASES: Record<string, string> = {
+  "/settings/bank-accounts": "/accounts",
+};
 
 export function AppLayout() {
   const { user, logout } = useAuth();
@@ -35,37 +54,127 @@ export function AppLayout() {
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const navItems = user
-    ? [
-        { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
-        { key: "/proforma-invoices", icon: <FileDoneOutlined />, label: "Proforma Invoices" },
-        { key: "/delivery-challans", icon: <CarOutlined />, label: "Delivery Challans" },
-        { key: "/tax-invoices", icon: <AuditOutlined />, label: "Tax Invoices" },
-        { key: "/receipts", icon: <WalletOutlined />, label: "Receipts" },
-        { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
-        { key: "/items", icon: <TagsOutlined />, label: "Items" },
-        { key: "/companies", icon: <BankOutlined />, label: "Companies" },
-        { type: "divider" as const },
-        { key: "/vendors", icon: <ShopOutlined />, label: "Vendors" },
-        { key: "/expenses", icon: <AccountBookOutlined />, label: "Expenses" },
-        { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
-        { key: "/expense-categories", icon: <FolderOutlined />, label: "Expense Categories" },
-        { key: "/accounts", icon: <CreditCardOutlined />, label: "Bank & Cash" },
-        { key: "/reports", icon: <BarChartOutlined />, label: "Reports" },
-        ...(user.role !== "staff" ? [{ key: "/users", icon: <TeamOutlined />, label: "Users" }] : []),
-      ]
-    : [];
+  const navItems: NavItem[] = useMemo(
+    () =>
+      user
+        ? [
+            { key: "/", icon: <HomeOutlined />, label: "Dashboard" },
+            {
+              key: "group-sales",
+              icon: <ShoppingCartOutlined />,
+              label: "Sales",
+              children: [
+                { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
+                { key: "/proforma-invoices", icon: <FileDoneOutlined />, label: "Proforma Invoices" },
+                { key: "/delivery-challans", icon: <CarOutlined />, label: "Delivery Challans" },
+                { key: "/tax-invoices", icon: <AuditOutlined />, label: "Tax Invoices" },
+                { key: "/receipts", icon: <WalletOutlined />, label: "Receipts" },
+              ],
+            },
+            {
+              key: "group-expenses",
+              icon: <DollarOutlined />,
+              label: "Expenses",
+              children: [
+                { key: "/expenses", icon: <AccountBookOutlined />, label: "Expenses" },
+                { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
+                { key: "/expense-categories", icon: <FolderOutlined />, label: "Expense Categories" },
+              ],
+            },
+            {
+              key: "group-banking",
+              icon: <CreditCardOutlined />,
+              label: "Banking",
+              children: [{ key: "/accounts", icon: <CreditCardOutlined />, label: "Bank & Cash" }],
+            },
+            {
+              key: "group-contacts",
+              icon: <ContactsOutlined />,
+              label: "Contacts",
+              children: [
+                { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
+                { key: "/vendors", icon: <ShopOutlined />, label: "Vendors" },
+              ],
+            },
+            {
+              key: "group-items",
+              icon: <TagsOutlined />,
+              label: "Items",
+              children: [{ key: "/items", icon: <TagsOutlined />, label: "Items" }],
+            },
+            {
+              key: "group-reports",
+              icon: <BarChartOutlined />,
+              label: "Reports",
+              children: [{ key: "/reports", icon: <BarChartOutlined />, label: "Reports" }],
+            },
+            {
+              key: "group-settings",
+              icon: <SettingOutlined />,
+              label: "Settings",
+              children: [
+                { key: "/companies", icon: <BankOutlined />, label: "Company Profile" },
+                ...(user.role !== "staff"
+                  ? [{ key: "/users", icon: <TeamOutlined />, label: "Users & Roles" }]
+                  : []),
+                { key: "/settings/bank-accounts", icon: <CreditCardOutlined />, label: "Bank Accounts" },
+                { key: "/settings/tax-rates", icon: <PercentageOutlined />, label: "Tax & GST" },
+                { key: "/settings/document-numbering", icon: <NumberOutlined />, label: "Document Numbering" },
+                { key: "/settings/payment-terms", icon: <FileProtectOutlined />, label: "Payment Terms" },
+                { key: "/settings/terms-conditions", icon: <SafetyOutlined />, label: "Terms & Conditions" },
+              ],
+            },
+          ]
+        : [],
+    [user]
+  );
 
-  const selectedKey =
-    navItems.find((item) => "key" in item && item.key && location.pathname.startsWith(item.key))?.key ?? "/";
+  // Every leaf route key, paired with the id of the group it lives in - used
+  // to highlight the active item and auto-expand its parent group.
+  const leafToGroup = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of navItems) {
+      if (item && "children" in item && item.children) {
+        for (const child of item.children) {
+          if (child && "key" in child && child.key) map.set(String(child.key), String(item.key));
+        }
+      }
+    }
+    return map;
+  }, [navItems]);
+
+  const allLeafKeys = useMemo(
+    () =>
+      Array.from(leafToGroup.keys())
+        .concat(["/"])
+        .sort((a, b) => b.length - a.length),
+    [leafToGroup]
+  );
+
+  const selectedKey = allLeafKeys.find((key) => (key === "/" ? location.pathname === "/" : location.pathname.startsWith(key))) ?? "/";
+  const activeGroupKey = leafToGroup.get(selectedKey);
+
+  const [openKeys, setOpenKeys] = useState<string[]>(activeGroupKey ? [activeGroupKey] : []);
+
+  // Re-derive on route change so navigating (e.g. via a dashboard shortcut)
+  // opens the right group even if the user never clicked the menu itself.
+  const [lastPath, setLastPath] = useState(location.pathname);
+  if (location.pathname !== lastPath) {
+    setLastPath(location.pathname);
+    if (activeGroupKey && !openKeys.includes(activeGroupKey)) {
+      setOpenKeys((prev) => [...prev, activeGroupKey]);
+    }
+  }
 
   const menu = (
     <Menu
       mode="inline"
       selectedKeys={[selectedKey]}
+      openKeys={openKeys}
+      onOpenChange={(keys) => setOpenKeys(keys)}
       items={navItems}
       onClick={({ key }) => {
-        navigate(key);
+        navigate(KEY_ALIASES[key] ?? key);
         setDrawerOpen(false);
       }}
       style={{ borderInlineEnd: "none" }}
@@ -84,7 +193,7 @@ export function AppLayout() {
   return (
     <Layout style={{ minHeight: "100vh" }}>
       {!isMobile && (
-        <Sider breakpoint="md" width={200} style={{ borderInlineEnd: "1px solid #f0f0f0" }}>
+        <Sider breakpoint="md" width={220} style={{ borderInlineEnd: "1px solid #f0f0f0", overflow: "auto" }}>
           <div style={{ height: 56, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <img src={logo} alt="Jose Industries" style={{ height: 28 }} />
           </div>
@@ -97,7 +206,7 @@ export function AppLayout() {
           placement="left"
           open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
-          width={220}
+          width={240}
           styles={{ body: { padding: 0 } }}
           closable={false}
         >

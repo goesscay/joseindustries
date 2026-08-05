@@ -330,3 +330,43 @@ SELECT id, 'Cash', 'cash', NULL, NULL, NULL, 0 FROM companies;
 INSERT IGNORE INTO accounts (company_id, name, account_type, bank_name, account_number, ifsc, opening_balance)
 SELECT id, COALESCE(bank_name, 'Bank'), 'bank', bank_name, bank_account_no, bank_ifsc, 0
 FROM companies WHERE bank_name IS NOT NULL;
+
+-- Settings: reusable master lists that back dropdowns elsewhere in the app,
+-- plus a couple of small per-company configuration fields. All simple
+-- lookup tables - no relation columns needed, since documents/items still
+-- store the chosen rate/term as a plain value (matches how the app already
+-- treats HSN/tax_rate as freeform per-line values, not foreign keys).
+CREATE TABLE IF NOT EXISTS tax_rates (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(50) NOT NULL,
+  rate DECIMAL(5, 2) NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_tax_rate (rate)
+);
+
+INSERT IGNORE INTO tax_rates (label, rate, is_default) VALUES
+  ('GST 0%', 0, FALSE),
+  ('GST 5%', 5, FALSE),
+  ('GST 12%', 12, FALSE),
+  ('GST 18%', 18, TRUE),
+  ('GST 28%', 28, FALSE);
+
+CREATE TABLE IF NOT EXISTS payment_terms (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_payment_term (label)
+);
+
+INSERT IGNORE INTO payment_terms (label) VALUES
+  ('100% Advance'),
+  ('50% Advance, Balance in 15 Days'),
+  ('Net 15'),
+  ('Net 30'),
+  ('Cash on Delivery');
+
+-- Terms & Conditions text printed on generated PDFs, editable per company.
+-- Null/empty means "use the built-in default wording" (documentPdf.ts).
+ALTER TABLE companies
+  ADD COLUMN IF NOT EXISTS terms_and_conditions TEXT NULL;

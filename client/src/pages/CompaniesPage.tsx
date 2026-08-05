@@ -41,7 +41,10 @@ export function CompaniesPage() {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      await api.put(`/companies/${editing.id}`, values);
+      // Merge onto the full record (not just this form's fields) so fields
+      // this form doesn't render - like terms_and_conditions, managed on
+      // its own Settings page - aren't wiped out by this save.
+      await api.put(`/companies/${editing.id}`, { ...editing, ...values });
       message.success("Company updated");
       setEditing(null);
       load();

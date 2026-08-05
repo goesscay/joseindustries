@@ -337,15 +337,20 @@ export function streamDocumentPdf(
     ["CGST", cgstTotal],
     ["SGST", sgstTotal],
   ];
-  const termsAndConditions = [
-    `Goods once sold will not be taken back unless otherwise agreed in writing.`,
-    `Payment shall be made according to the agreed payment terms.`,
-    `Any shortage or damage should be reported immediately upon receipt of goods.`,
-    `Warranty, where applicable, is governed by the agreed quotation / order terms.`,
-    `Transportation and installation charges are applicable as agreed.`,
-    `All disputes are subject to Chennai jurisdiction.`,
-    `This ${titleLower} is subject to applicable GST laws and regulations.`,
-  ];
+  // Company-editable (Settings > Terms & Conditions) - one line per bullet,
+  // blank lines ignored. Falls back to the built-in default wording when a
+  // company hasn't set its own.
+  const termsAndConditions = company.terms_and_conditions
+    ? company.terms_and_conditions.split("\n").map((line) => line.trim()).filter(Boolean)
+    : [
+        `Goods once sold will not be taken back unless otherwise agreed in writing.`,
+        `Payment shall be made according to the agreed payment terms.`,
+        `Any shortage or damage should be reported immediately upon receipt of goods.`,
+        `Warranty, where applicable, is governed by the agreed quotation / order terms.`,
+        `Transportation and installation charges are applicable as agreed.`,
+        `All disputes are subject to Chennai jurisdiction.`,
+        `This ${titleLower} is subject to applicable GST laws and regulations.`,
+      ];
 
   const totalsRowCount = 4 + (isInterState ? 1 : 2) + 2; // subtotal/discount/freight/installation + tax rows + roundoff/grand
   const estimatedFooterHeight =

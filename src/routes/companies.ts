@@ -50,6 +50,7 @@ companiesRouter.put(
       bank_name,
       bank_account_no,
       bank_ifsc,
+      terms_and_conditions,
       is_active,
     } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
@@ -57,7 +58,8 @@ companiesRouter.put(
     await pool.query(
       `UPDATE companies SET
          name = ?, tagline = ?, address = ?, phone = ?, email = ?, gstin = ?,
-         state = ?, state_code = ?, bank_name = ?, bank_account_no = ?, bank_ifsc = ?, is_active = ?
+         state = ?, state_code = ?, bank_name = ?, bank_account_no = ?, bank_ifsc = ?,
+         terms_and_conditions = ?, is_active = ?
        WHERE id = ?`,
       [
         name,
@@ -71,6 +73,7 @@ companiesRouter.put(
         bank_name || null,
         bank_account_no || null,
         bank_ifsc || null,
+        terms_and_conditions || null,
         is_active ?? true,
         id,
       ]

@@ -25,9 +25,32 @@ export interface Company {
   bank_name: string | null;
   bank_account_no: string | null;
   bank_ifsc: string | null;
+  terms_and_conditions: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaxRate {
+  id: number;
+  label: string;
+  rate: string;
+  is_default: boolean | number;
+  created_at: string;
+}
+
+export interface PaymentTerm {
+  id: number;
+  label: string;
+  created_at: string;
+}
+
+export interface DocCounter {
+  doc_type: string;
+  company_code: string;
+  company_name: string | null;
+  financial_year: string;
+  last_number: number;
 }
 
 export interface Customer {

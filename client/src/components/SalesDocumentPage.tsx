@@ -4,6 +4,7 @@ import {
   Table,
   Button,
   Input,
+  AutoComplete,
   Space,
   Modal,
   Form,
@@ -25,7 +26,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, SwapOutlin
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Company, Customer, Item, SalesDocument, DocumentLineItem, DocStatus, Role } from "../types";
+import { Company, Customer, Item, PaymentTerm, SalesDocument, DocumentLineItem, DocStatus, Role } from "../types";
 
 const PAGE_SIZE = 10;
 
@@ -96,6 +97,7 @@ export function SalesDocumentPage({
   const [companies, setCompanies] = useState<Company[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [paymentTerms, setPaymentTerms] = useState<PaymentTerm[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<SalesDocument | null>(null);
@@ -135,6 +137,7 @@ export function SalesDocumentPage({
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
     api.get<{ data: Customer[] }>("/customers?perPage=200").then((res) => setCustomers(res.data)).catch(() => {});
     api.get<{ data: Item[] }>("/items?perPage=200").then((res) => setItems(res.data)).catch(() => {});
+    api.get<{ data: PaymentTerm[] }>("/payment-terms").then((res) => setPaymentTerms(res.data)).catch(() => {});
   }, []);
 
   const totals = useMemo(() => {
@@ -534,7 +537,11 @@ export function SalesDocumentPage({
                     </Col>
                     <Col xs={24} sm={8}>
                       <Form.Item name="mode_terms_of_payment" label="Mode/Terms of Payment">
-                        <Input />
+                        <AutoComplete
+                          options={paymentTerms.map((t) => ({ value: t.label }))}
+                          filterOption={(input, option) => (option?.value as string).toLowerCase().includes(input.toLowerCase())}
+                          placeholder="e.g. 50% Advance, Balance in 15 Days"
+                        />
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={8}>
