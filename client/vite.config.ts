@@ -25,6 +25,16 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Workbox's SPA NavigationRoute intercepts every top-level browser
+        // navigation (not just fetch/XHR) and serves cached index.html so
+        // client-side routes work offline. Without this denylist it also
+        // swallows navigations to /api/* - e.g. PDF buttons use
+        // window.open(url, "_blank"), which is a real navigation - so the
+        // browser tab loaded the cached app shell (Dashboard) instead of
+        // ever reaching the PDF route. Excluding /api/ lets those requests
+        // fall through to the runtimeCaching rule below (or straight to
+        // network).
+        navigateFallbackDenylist: [/^\/api\//],
         // This is a business app, not a content site - API data must never
         // be served stale-first. NetworkFirst still lets already-fetched
         // screens render offline (e.g. flaky connectivity on a job site)
