@@ -182,34 +182,55 @@ export function streamDocumentPdf(
 
   function drawMetaBar() {
     const boxY = state.y;
-    const colWidth = CONTENT_WIDTH / 3;
     const pad = 10;
     const rowStep = 13;
     const boxHeight = rowStep * 3 + 16;
-    const col2X = CONTENT_LEFT + colWidth;
-    const col3X = CONTENT_LEFT + colWidth * 2;
 
-    // Background + borders drawn first so the single text pass that follows
-    // ends up on top, instead of leaving a hidden duplicate text layer.
+    // Each conceptual group is filtered to only its populated rows, and any
+    // group left with nothing to show is dropped entirely - an empty group
+    // used to still draw its bordered column, rendering as an obviously
+    // blank box (e.g. a document with no PO reference at all) rather than
+    // adapting. The remaining groups then split the full width evenly.
+    const section1: [string, string][] = (
+      [
+        [`${title} No.:`, document.doc_number],
+        [`${title} Date:`, formatDate(document.issue_date)],
+        ["Due Date:", formatDate(document.due_date)],
+      ] as [string, string][]
+    ).filter(([, v]) => v);
+    const section2: [string, string][] = (
+      [
+        ["Reference / PO No.:", document.buyers_order_no || ""],
+        ["PO Date:", formatDate(document.buyers_order_date)],
+        ["Delivery Challan No.:", document.dispatch_doc_no || ""],
+      ] as [string, string][]
+    ).filter(([, v]) => v);
+    const section3: [string, string][] = (
+      [
+        ["Place of Supply:", document.place_of_supply || ""],
+        ["Reverse Charge:", Boolean(document.reverse_charge) ? "Yes" : "No"],
+        ["GSTIN:", company.gstin || ""],
+      ] as [string, string][]
+    ).filter(([, v]) => v);
+
+    const sections = [section1, section2, section3].filter((s) => s.length > 0);
+    const colCount = Math.max(sections.length, 1);
+    const colWidth = CONTENT_WIDTH / colCount;
+
     doc.rect(CONTENT_LEFT, boxY, CONTENT_WIDTH, boxHeight).fillColor(LIGHT_BG).fill();
     doc.rect(CONTENT_LEFT, boxY, CONTENT_WIDTH, boxHeight).strokeColor(BORDER).stroke();
-    doc.moveTo(col2X, boxY).lineTo(col2X, boxY + boxHeight).strokeColor(BORDER).stroke();
-    doc.moveTo(col3X, boxY).lineTo(col3X, boxY + boxHeight).strokeColor(BORDER).stroke();
+    for (let i = 1; i < colCount; i++) {
+      const x = CONTENT_LEFT + colWidth * i;
+      doc.moveTo(x, boxY).lineTo(x, boxY + boxHeight).strokeColor(BORDER).stroke();
+    }
 
-    let y1 = boxY + 8;
-    y1 = metaRow(`${title} No.:`, document.doc_number, CONTENT_LEFT + pad, y1, colWidth - pad * 2) + 2;
-    y1 = metaRow(`${title} Date:`, formatDate(document.issue_date), CONTENT_LEFT + pad, y1, colWidth - pad * 2) + 2;
-    metaRow("Due Date:", formatDate(document.due_date), CONTENT_LEFT + pad, y1, colWidth - pad * 2);
-
-    let y2 = boxY + 8;
-    y2 = metaRow("Reference / PO No.:", document.buyers_order_no || "", col2X + pad, y2, colWidth - pad * 2) + 2;
-    y2 = metaRow("PO Date:", formatDate(document.buyers_order_date), col2X + pad, y2, colWidth - pad * 2) + 2;
-    metaRow("Delivery Challan No.:", document.dispatch_doc_no || "", col2X + pad, y2, colWidth - pad * 2);
-
-    let y3 = boxY + 8;
-    y3 = metaRow("Place of Supply:", document.place_of_supply || "", col3X + pad, y3, colWidth - pad * 2) + 2;
-    y3 = metaRow("Reverse Charge:", Boolean(document.reverse_charge) ? "Yes" : "No", col3X + pad, y3, colWidth - pad * 2) + 2;
-    metaRow("GSTIN:", company.gstin || "", col3X + pad, y3, colWidth - pad * 2);
+    sections.forEach((section, i) => {
+      const x = CONTENT_LEFT + colWidth * i + pad;
+      let y = boxY + 8;
+      section.forEach(([label, value]) => {
+        y = metaRow(label, value, x, y, colWidth - pad * 2) + 2;
+      });
+    });
 
     state.y = boxY + boxHeight + 14;
   }
@@ -352,10 +373,58 @@ export function streamDocumentPdf(
         `This ${titleLower} is subject to applicable GST laws and regulations.`,
       ];
 
-  const totalsRowCount = 4 + (isInterState ? 1 : 2) + 2; // subtotal/discount/freight/installation + tax rows + roundoff/grand
+  // The closing block below must never split across a page, so its full
+  // height is measured up front - using pdfkit's own text-measurement calls
+  // at the exact font/width each piece will render with, not a rough guess
+  // - and pushed onto a fresh page as a whole if it wouldn't fit. An
+  // inaccurate estimate here either wastes most of a page (false positive,
+  // e.g. guessing 8 payment rows when only 5 are populated) or splits
+  // content mid-block (false negative) - both look unprofessional.
+
+  // Totals always render the same 8 rows (subtotal, discount, freight,
+  // installation, and all three of IGST/CGST/SGST - the non-applicable
+  // split always prints as zero rather than being omitted - plus round
+  // off), so this block's height never varies with the data.
+  const totalsBlockHeight = 8 * 15 + 4 + 6 + 18;
+
+  const wordsText = amountInWords(grandTotal);
+  const wordsLabel = "Amount in Words: ";
+  const wordsLabelWidth = doc.font("Helvetica-Bold").fontSize(9).widthOfString(wordsLabel) + 4;
+  const wordsValueWidth = CONTENT_WIDTH - wordsLabelWidth - 20;
+  const wordsHeight = Math.max(20, doc.font("Helvetica").fontSize(9).heightOfString(wordsText, { width: wordsValueWidth }) + 16);
+
+  const footerColWidth = CONTENT_WIDTH / 2 - 10;
+  const paymentLabelWidth = footerColWidth * 0.4;
+  const paymentValueWidth = footerColWidth * 0.6;
+  const paymentRows: [string, string][] = (
+    [
+      ["Account Name", company.name],
+      ["Bank Name", company.bank_name],
+      ["Account No.", company.bank_account_no],
+      ["IFSC Code", company.bank_ifsc],
+      ["Payment Terms", document.mode_terms_of_payment],
+      ["Credit Period", document.credit_period],
+    ] as [string, string | null][]
+  ).filter(([, value]) => value) as [string, string][];
+
+  let paymentSectionHeight = 16; // header line + gap, matches the render pass below
+  for (const [label, value] of paymentRows) {
+    const labelHeight = doc.fontSize(8.3).font("Helvetica").heightOfString(label, { width: paymentLabelWidth });
+    const valueHeight = doc.fontSize(8.3).font("Helvetica-Bold").heightOfString(value, { width: paymentValueWidth });
+    paymentSectionHeight += Math.max(labelHeight, valueHeight) + 4;
+  }
+
+  let termsSectionHeight = 16; // header line + gap
+  doc.fontSize(7.8).font("Helvetica");
+  termsAndConditions.forEach((term, i) => {
+    termsSectionHeight += doc.heightOfString(`${i + 1}. ${term}`, { width: footerColWidth }) + 3;
+  });
+  doc.font("Helvetica");
+
+  const ackSectionHeight = 62;
+
   const estimatedFooterHeight =
-    totalsRowCount * 15 + 40 /* amount in words */ + 24 /* section headers */ + 8 * 12 /* payment rows */ +
-    termsAndConditions.length * 22 + 70 /* ack + signature */;
+    totalsBlockHeight + 12 + wordsHeight + 14 + Math.max(paymentSectionHeight, termsSectionHeight) + 16 + ackSectionHeight;
 
   if (state.y + estimatedFooterHeight > BOTTOM_LIMIT) {
     newPage(true);
@@ -395,11 +464,9 @@ export function streamDocumentPdf(
   state.y += 12;
 
   // ---- Amount in words ----
-  const wordsText = amountInWords(grandTotal);
-  const wordsLabel = "Amount in Words: ";
-  const wordsLabelWidth = doc.font("Helvetica-Bold").fontSize(9).widthOfString(wordsLabel) + 4;
-  const wordsValueWidth = CONTENT_WIDTH - wordsLabelWidth - 20;
-  const wordsHeight = Math.max(20, doc.font("Helvetica").fontSize(9).heightOfString(wordsText, { width: wordsValueWidth }) + 16);
+  // (wordsText/wordsLabelWidth/wordsValueWidth/wordsHeight already computed
+  // above, for the footer-height measurement pass - reused here as-is so
+  // the render can never drift from what was measured.)
   doc.rect(CONTENT_LEFT, state.y, CONTENT_WIDTH, wordsHeight).fillColor(LIGHT_BG).fill();
   doc.fillColor(DARK).font("Helvetica-Bold").fontSize(9).text(wordsLabel, CONTENT_LEFT + 10, state.y + 8, {
     width: wordsLabelWidth,
@@ -411,26 +478,16 @@ export function streamDocumentPdf(
   state.y += wordsHeight + 14;
 
   // ---- Payment/Bank details + Terms & Conditions ----
-  const colWidth = CONTENT_WIDTH / 2 - 10;
+  // (footerColWidth/paymentLabelWidth/paymentValueWidth/paymentRows already
+  // computed above, for the footer-height measurement pass.)
   const sectionTop = state.y;
+  const paymentValueX = CONTENT_LEFT + paymentLabelWidth;
 
   doc.fontSize(8.5).fillColor(GREEN).font("Helvetica-Bold").text("PAYMENT / BANK DETAILS", CONTENT_LEFT, sectionTop, {
     characterSpacing: 1.2,
   });
   let py = doc.y + 6;
-  const paymentRows: [string, string | null][] = [
-    ["Account Name", company.name],
-    ["Bank Name", company.bank_name],
-    ["Account No.", company.bank_account_no],
-    ["IFSC Code", company.bank_ifsc],
-    ["Payment Terms", document.mode_terms_of_payment],
-    ["Credit Period", document.credit_period],
-  ];
-  const paymentLabelWidth = colWidth * 0.4;
-  const paymentValueWidth = colWidth * 0.6;
-  const paymentValueX = CONTENT_LEFT + paymentLabelWidth;
   for (const [label, value] of paymentRows) {
-    if (!value) continue;
     doc.fontSize(8.3).fillColor(MUTED).font("Helvetica").text(label, CONTENT_LEFT, py, { width: paymentLabelWidth });
     const labelBottom = doc.y;
     doc.fontSize(8.3).fillColor(DARK).font("Helvetica-Bold").text(value, paymentValueX, py, {
@@ -448,7 +505,7 @@ export function streamDocumentPdf(
   let ty = doc.y + 6;
   doc.fontSize(7.8).fillColor(GRAY).font("Helvetica");
   termsAndConditions.forEach((term, i) => {
-    doc.text(`${i + 1}. ${term}`, rightX, ty, { width: colWidth });
+    doc.text(`${i + 1}. ${term}`, rightX, ty, { width: footerColWidth });
     ty = doc.y + 3;
   });
   const termsBottom = ty;
