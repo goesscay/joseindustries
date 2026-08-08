@@ -13,7 +13,7 @@
     "build:client": "npm install --prefix client && npm run build --prefix client",
     "build:server": "tsc -p tsconfig.json",
     "build": "npm run build:client && npm run build:server",
-    "postinstall": "npm run build",
+    "postinstall": "npm run build && npm run db:migrate",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "tsx src/db/migrate.ts",
