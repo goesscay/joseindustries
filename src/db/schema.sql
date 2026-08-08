@@ -370,3 +370,33 @@ INSERT IGNORE INTO payment_terms (label) VALUES
 -- Null/empty means "use the built-in default wording" (documentPdf.ts).
 ALTER TABLE companies
   ADD COLUMN IF NOT EXISTS terms_and_conditions TEXT NULL;
+
+-- Reusable, editable Terms & Conditions wording a user can pick when creating
+-- a Quotation/Proforma Invoice/Delivery Challan/Tax Invoice, tagged to which
+-- document type(s) it's meant for ('all' shows up as an option everywhere).
+-- Picking one only pre-fills the document's own terms_and_conditions text
+-- below - the document always stores its own (possibly then hand-edited)
+-- copy, so editing or deleting a template later never changes documents
+-- that already used it.
+CREATE TABLE IF NOT EXISTS terms_and_conditions_templates (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  doc_type ENUM('all', 'quotation', 'proforma_invoice', 'delivery_challan', 'tax_invoice') NOT NULL DEFAULT 'all',
+  content TEXT NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO terms_and_conditions_templates (id, title, doc_type, content, is_default) VALUES
+  (1, 'Standard Terms', 'all',
+   'Goods once sold will not be taken back unless otherwise agreed in writing.\nPayment shall be made according to the agreed payment terms.\nAny shortage or damage should be reported immediately upon receipt of goods.\nWarranty, where applicable, is governed by the agreed quotation / order terms.\nTransportation and installation charges are applicable as agreed.\nAll disputes are subject to Chennai jurisdiction.\nThis document is subject to applicable GST laws and regulations.',
+   TRUE);
+
+-- Per-document override of the printed Terms & Conditions text - populated
+-- (and then freely editable) from a terms_and_conditions_templates row, but
+-- stored as plain text on the document itself so it survives template edits.
+-- Falls back to companies.terms_and_conditions, then the built-in default,
+-- when left blank - same fallback chain as before this table existed.
+ALTER TABLE documents
+  ADD COLUMN IF NOT EXISTS terms_and_conditions TEXT NULL;

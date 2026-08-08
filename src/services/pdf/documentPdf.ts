@@ -358,11 +358,12 @@ export function streamDocumentPdf(
     ["CGST", cgstTotal],
     ["SGST", sgstTotal],
   ];
-  // Company-editable (Settings > Terms & Conditions) - one line per bullet,
-  // blank lines ignored. Falls back to the built-in default wording when a
-  // company hasn't set its own.
-  const termsAndConditions = company.terms_and_conditions
-    ? company.terms_and_conditions.split("\n").map((line) => line.trim()).filter(Boolean)
+  // Per-document text wins first (picked from a template and/or hand-edited
+  // on this document), then the company-wide default (Settings > Terms &
+  // Conditions), then the built-in wording below - one line per bullet,
+  // blank lines ignored.
+  const termsAndConditions = (document.terms_and_conditions || company.terms_and_conditions)
+    ? (document.terms_and_conditions || company.terms_and_conditions)!.split("\n").map((line) => line.trim()).filter(Boolean)
     : [
         `Goods once sold will not be taken back unless otherwise agreed in writing.`,
         `Payment shall be made according to the agreed payment terms.`,

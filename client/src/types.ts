@@ -45,6 +45,18 @@ export interface PaymentTerm {
   created_at: string;
 }
 
+export type TermsTemplateDocType = "all" | "quotation" | "proforma_invoice" | "delivery_challan" | "tax_invoice";
+
+export interface TermsTemplate {
+  id: number;
+  title: string;
+  doc_type: TermsTemplateDocType;
+  content: string;
+  is_default: boolean | number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DocCounter {
   doc_type: string;
   company_code: string;
@@ -129,6 +141,7 @@ export interface SalesDocument {
   mode_terms_of_payment: string | null;
   other_reference: string | null;
   supplier_reference: string | null;
+  terms_and_conditions: string | null;
 
   due_date: string | null;
   credit_period: string | null;

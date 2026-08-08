@@ -26,9 +26,30 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, SwapOutlin
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Company, Customer, Item, PaymentTerm, SalesDocument, DocumentLineItem, DocStatus, Role } from "../types";
+import {
+  Company,
+  Customer,
+  Item,
+  PaymentTerm,
+  SalesDocument,
+  DocumentLineItem,
+  DocStatus,
+  Role,
+  TermsTemplate,
+  TermsTemplateDocType,
+} from "../types";
 
 const PAGE_SIZE = 10;
+
+// Maps this component's apiPath prop to the doc_type value used by
+// terms_and_conditions_templates.doc_type, so the Terms & Conditions picker
+// only offers templates tagged for this document (plus ones tagged "all").
+const API_PATH_TO_DOC_TYPE: Record<string, TermsTemplateDocType> = {
+  "/quotations": "quotation",
+  "/proforma-invoices": "proforma_invoice",
+  "/delivery-challans": "delivery_challan",
+  "/tax-invoices": "tax_invoice",
+};
 
 const DEFAULT_STATUS_LABELS: Record<DocStatus, string> = {
   draft: "Draft",
@@ -98,6 +119,9 @@ export function SalesDocumentPage({
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [paymentTerms, setPaymentTerms] = useState<PaymentTerm[]>([]);
+  const [termsTemplates, setTermsTemplates] = useState<TermsTemplate[]>([]);
+  const docType = API_PATH_TO_DOC_TYPE[apiPath];
+  const applicableTemplates = termsTemplates.filter((t) => t.doc_type === "all" || t.doc_type === docType);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<SalesDocument | null>(null);
@@ -138,7 +162,11 @@ export function SalesDocumentPage({
     api.get<{ data: Customer[] }>("/customers?perPage=200").then((res) => setCustomers(res.data)).catch(() => {});
     api.get<{ data: Item[] }>("/items?perPage=200").then((res) => setItems(res.data)).catch(() => {});
     api.get<{ data: PaymentTerm[] }>("/payment-terms").then((res) => setPaymentTerms(res.data)).catch(() => {});
-  }, []);
+    api
+      .get<{ data: TermsTemplate[] }>(`/terms-templates?docType=${docType}`)
+      .then((res) => setTermsTemplates(res.data))
+      .catch(() => {});
+  }, [docType]);
 
   const totals = useMemo(() => {
     let subtotal = 0;
@@ -172,17 +200,29 @@ export function SalesDocumentPage({
     setConvertTarget(null);
     setConvertSourceId(null);
     form.resetFields();
+    // Prefer a default template tagged specifically for this document type
+    // over a default tagged "all", so the picker starts pre-filled but the
+    // user can still swap or edit it before saving.
+    const defaultTemplate =
+      applicableTemplates.find((t) => t.is_default && t.doc_type === docType) ||
+      applicableTemplates.find((t) => t.is_default);
     form.setFieldsValue({
       issue_date: dayjs(),
       company_id: companies[0]?.id,
       reverse_charge: false,
       freight_charges: 0,
       installation_charges: 0,
+      terms_and_conditions: defaultTemplate?.content,
       items: [
         { item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, discount_percent: 0, tax_rate: 18 },
       ],
     });
     setModalOpen(true);
+  }
+
+  function applyTermsTemplate(templateId: number) {
+    const template = termsTemplates.find((t) => t.id === templateId);
+    if (template) form.setFieldsValue({ terms_and_conditions: template.content });
   }
 
   function fillFormFrom(doc: SalesDocument, docItems: DocumentLineItem[], issueDate: dayjs.Dayjs) {
@@ -207,6 +247,7 @@ export function SalesDocumentPage({
       mode_terms_of_payment: doc.mode_terms_of_payment,
       other_reference: doc.other_reference,
       supplier_reference: doc.supplier_reference,
+      terms_and_conditions: doc.terms_and_conditions,
       credit_period: doc.credit_period,
       reverse_charge: Boolean(doc.reverse_charge),
       freight_charges: Number(doc.freight_charges) || 0,
@@ -643,6 +684,29 @@ export function SalesDocumentPage({
                       </Form.Item>
                     </Col>
                   </Row>
+                ),
+              },
+              {
+                key: "terms",
+                label: "Terms & Conditions (optional)",
+                children: (
+                  <>
+                    <Form.Item label="Start from a saved template">
+                      <Select
+                        allowClear
+                        placeholder="Choose a template to fill in the text below - you can still edit it after"
+                        options={applicableTemplates.map((t) => ({ value: t.id, label: t.title }))}
+                        onChange={(value) => value && applyTermsTemplate(value)}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      name="terms_and_conditions"
+                      label="Printed Terms & Conditions"
+                      extra="One line per bullet point. Leave blank to use the company's default wording."
+                    >
+                      <Input.TextArea rows={6} />
+                    </Form.Item>
+                  </>
                 ),
               },
             ]}
