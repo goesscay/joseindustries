@@ -28,8 +28,11 @@ export interface AppUser {
   status: Status;
   created_at: string;
   updated_at: string;
-  permissions: UserPermissions;
-  accountAccess: UserAccountAccess;
+  /** Only present on the currently-authenticated user's own payload (/auth/login, /auth/me) - not on GET /users list rows. */
+  permissions?: UserPermissions;
+  accountAccess?: UserAccountAccess;
+  /** Only present on GET /users list rows - a cheap "has any restriction rows" flag, in place of the full permissions/accountAccess payload above. */
+  accessRestricted?: boolean;
 }
 
 export interface Company {

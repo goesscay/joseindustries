@@ -217,8 +217,7 @@ export function UsersPage() {
       key: "access",
       render: (_, record) => {
         if (record.role !== "staff") return <Tag>Full</Tag>;
-        if (!record.permissions.restricted && !record.accountAccess.restricted) return <Tag>Full</Tag>;
-        return <Tag color="orange">Restricted</Tag>;
+        return record.accessRestricted ? <Tag color="orange">Restricted</Tag> : <Tag>Full</Tag>;
       },
     },
     {

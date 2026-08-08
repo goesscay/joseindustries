@@ -49,8 +49,25 @@ usersRouter.get(
       searchParams
     );
 
+    // Cheap "is this staff member restricted at all" flag for the Access
+    // column - the full permissions/account-access payload is only fetched
+    // on demand (Edit modal), not for every row in the list.
+    const staffIds = (rows as User[]).filter((u) => u.role === "staff").map((u) => u.id);
+    const restrictedIds = new Set<number>();
+    if (staffIds.length) {
+      const [permRows] = await pool.query<any[]>(
+        "SELECT DISTINCT user_id FROM user_permissions WHERE user_id IN (?)",
+        [staffIds]
+      );
+      const [acctRows] = await pool.query<any[]>(
+        "SELECT DISTINCT user_id FROM user_account_access WHERE user_id IN (?)",
+        [staffIds]
+      );
+      for (const r of [...permRows, ...acctRows]) restrictedIds.add(r.user_id as number);
+    }
+
     res.json({
-      data: (rows as User[]).map(toPublicUser),
+      data: (rows as User[]).map((u) => ({ ...toPublicUser(u), accessRestricted: restrictedIds.has(u.id) })),
       meta: { page, perPage, total: countRows[0].total as number },
     });
   })

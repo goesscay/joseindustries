@@ -46,7 +46,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (moduleKey: string, action: PermissionAction) => {
       if (!user) return false;
       if (user.role === "super_admin" || user.role === "admin") return true;
-      if (!user.permissions.restricted) return true;
+      // permissions is only ever absent if something upstream failed to load
+      // it - fail open the same way "no rows saved yet" does, rather than
+      // crashing the whole app for every gated button/route.
+      if (!user.permissions || !user.permissions.restricted) return true;
       const access = user.permissions.modules[moduleKey];
       if (!access) return false;
       const field = { view: "can_view", create: "can_create", edit: "can_edit", delete: "can_delete" }[action] as
@@ -63,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (accountId: number) => {
       if (!user) return false;
       if (user.role === "super_admin" || user.role === "admin") return true;
-      if (!user.accountAccess.restricted) return true;
+      if (!user.accountAccess || !user.accountAccess.restricted) return true;
       return user.accountAccess.accountIds.includes(accountId);
     },
     [user]
