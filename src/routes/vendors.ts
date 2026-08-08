@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { Vendor } from "../types";
 
 export const vendorsRouter = Router();
+const MODULE = "contacts.vendors";
 
 vendorsRouter.use(requireAuth);
 
@@ -15,6 +17,7 @@ async function findVendorById(id: number): Promise<Vendor | undefined> {
 
 vendorsRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -39,6 +42,7 @@ vendorsRouter.get(
 
 vendorsRouter.get(
   "/:id",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const vendor = await findVendorById(Number(req.params.id));
     if (!vendor) return res.status(404).json({ message: "Vendor not found" });
@@ -48,6 +52,7 @@ vendorsRouter.get(
 
 vendorsRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { name, gstin, phone, email, address, state } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
@@ -63,6 +68,7 @@ vendorsRouter.post(
 
 vendorsRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findVendorById(id);
@@ -82,7 +88,7 @@ vendorsRouter.put(
 
 vendorsRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findVendorById(id);

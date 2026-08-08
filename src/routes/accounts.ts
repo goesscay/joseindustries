@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess, getUserAccountIds } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { Account, JournalDirection, LedgerEntry } from "../types";
 
 export const accountsRouter = Router();
+const MODULE = "banking.accounts";
 accountsRouter.use(requireAuth);
 
 const BALANCE_EXPR = `
@@ -25,10 +27,25 @@ async function findById(id: number): Promise<Account | undefined> {
 
 accountsRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const companyId = req.query.company_id ? Number(req.query.company_id) : null;
-    const whereClause = companyId ? "WHERE a.company_id = ?" : "";
-    const params = companyId ? [companyId] : [];
+    const allowedIds = await getUserAccountIds(req.user!.sub, req.user!.role);
+
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (companyId) {
+      clauses.push("a.company_id = ?");
+      params.push(companyId);
+    }
+    if (allowedIds !== null) {
+      // Scoped to specific accounts (see user_account_access) - an empty
+      // allowlist means literally no accounts, so short-circuit with a
+      // clause that can never match rather than an invalid empty IN ().
+      clauses.push(allowedIds.length ? "a.id IN (?)" : "1 = 0");
+      if (allowedIds.length) params.push(allowedIds);
+    }
+    const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 
     const [rows] = await pool.query<any[]>(
       `SELECT a.*, co.name as company_name, co.code as company_code, (${BALANCE_EXPR}) as balance
@@ -44,8 +61,14 @@ accountsRouter.get(
 
 accountsRouter.get(
   "/:id",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
-    const account = await findById(Number(req.params.id));
+    const id = Number(req.params.id);
+    const allowedIds = await getUserAccountIds(req.user!.sub, req.user!.role);
+    if (allowedIds !== null && !allowedIds.includes(id)) {
+      return res.status(403).json({ message: "You don't have access to this account" });
+    }
+    const account = await findById(id);
     if (!account) return res.status(404).json({ message: "Account not found" });
     res.json({ account });
   })
@@ -53,6 +76,7 @@ accountsRouter.get(
 
 accountsRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { company_id, name, account_type, bank_name, account_number, ifsc, opening_balance } = req.body ?? {};
     if (!company_id || !name) return res.status(400).json({ message: "company_id and name are required" });
@@ -87,8 +111,13 @@ accountsRouter.post(
 
 accountsRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
+    const allowedIds = await getUserAccountIds(req.user!.sub, req.user!.role);
+    if (allowedIds !== null && !allowedIds.includes(id)) {
+      return res.status(403).json({ message: "You don't have access to this account" });
+    }
     const existing = await findById(id);
     if (!existing) return res.status(404).json({ message: "Account not found" });
 
@@ -128,9 +157,13 @@ accountsRouter.put(
 
 accountsRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
+    const allowedIds = await getUserAccountIds(req.user!.sub, req.user!.role);
+    if (allowedIds !== null && !allowedIds.includes(id)) {
+      return res.status(403).json({ message: "You don't have access to this account" });
+    }
     const existing = await findById(id);
     if (!existing) return res.status(404).json({ message: "Account not found" });
 
@@ -154,8 +187,13 @@ accountsRouter.delete(
 // starting from the account's opening balance.
 accountsRouter.get(
   "/:id/ledger",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
+    const allowedIds = await getUserAccountIds(req.user!.sub, req.user!.role);
+    if (allowedIds !== null && !allowedIds.includes(id)) {
+      return res.status(403).json({ message: "You don't have access to this account" });
+    }
     const account = await findById(id);
     if (!account) return res.status(404).json({ message: "Account not found" });
 

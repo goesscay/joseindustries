@@ -10,7 +10,7 @@ import { Company, Expense, ExpenseCategory, Vendor } from "../types";
 const PAGE_SIZE = 10;
 
 export function ExpensesPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -26,7 +26,9 @@ export function ExpensesPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("expenses.expenses", "create");
+  const canEdit = can("expenses.expenses", "edit");
+  const canDelete = can("expenses.expenses", "delete");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -148,7 +150,11 @@ export function ExpensesPage() {
       width: 110,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this expense?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -175,9 +181,11 @@ export function ExpensesPage() {
             }}
             style={{ width: 240 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New Expense
-          </Button>
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New Expense
+            </Button>
+          )}
         </Space>
       </Space>
 

@@ -4,6 +4,8 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import { hashPassword } from "../utils/password";
 import { canAssignRole, canManageTarget } from "../utils/roles";
 import { asyncHandler } from "../utils/asyncHandler";
+import { getUserPermissions, getUserAccountIds } from "../utils/permissions";
+import { MODULE_KEYS } from "../constants/permissions";
 import { Role, Status, User } from "../types";
 
 export const usersRouter = Router();
@@ -176,6 +178,120 @@ usersRouter.patch(
     await pool.query("UPDATE users SET status = ? WHERE id = ?", [status as Status, id]);
     const updated = await findUserById(id);
     res.json({ user: toPublicUser(updated!) });
+  })
+);
+
+// ---- Fine-grained module permissions (view/create/edit/delete per module) ----
+// Meaningless for super_admin/admin (they always have full access - see
+// utils/permissions.ts), so this is really "staff access control", but any
+// authenticated admin/super_admin can read or set it for any manageable
+// target regardless of the target's current role.
+
+usersRouter.get(
+  "/:id/permissions",
+  asyncHandler(async (req, res) => {
+    const target = await findUserById(Number(req.params.id));
+    if (!target) return res.status(404).json({ message: "User not found" });
+    const { restricted, modules } = await getUserPermissions(target.id, target.role);
+    res.json({ restricted, modules });
+  })
+);
+
+usersRouter.put(
+  "/:id/permissions",
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const target = await findUserById(id);
+    if (!target) return res.status(404).json({ message: "User not found" });
+    if (!canManageTarget(req.user!.role, target.role)) {
+      return res.status(403).json({ message: "You cannot manage this user" });
+    }
+
+    const { restricted, modules } = req.body ?? {};
+    if (typeof restricted !== "boolean") {
+      return res.status(400).json({ message: "restricted (boolean) is required" });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("DELETE FROM user_permissions WHERE user_id = ?", [id]);
+      if (restricted) {
+        const entries = Object.entries(modules ?? {}).filter(([key]) => MODULE_KEYS.includes(key));
+        for (const [moduleKey, flags] of entries) {
+          const f = flags as Record<string, unknown>;
+          await conn.query(
+            `INSERT INTO user_permissions (user_id, module_key, can_view, can_create, can_edit, can_delete)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [id, moduleKey, Boolean(f.can_view), Boolean(f.can_create), Boolean(f.can_edit), Boolean(f.can_delete)]
+          );
+        }
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    const result = await getUserPermissions(id, target.role);
+    res.json(result);
+  })
+);
+
+// ---- Per-account access (Banking) ----
+
+usersRouter.get(
+  "/:id/account-access",
+  asyncHandler(async (req, res) => {
+    const target = await findUserById(Number(req.params.id));
+    if (!target) return res.status(404).json({ message: "User not found" });
+    const accountIds = await getUserAccountIds(target.id, target.role);
+    res.json({ restricted: accountIds !== null, accountIds: accountIds ?? [] });
+  })
+);
+
+usersRouter.put(
+  "/:id/account-access",
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const target = await findUserById(id);
+    if (!target) return res.status(404).json({ message: "User not found" });
+    if (!canManageTarget(req.user!.role, target.role)) {
+      return res.status(403).json({ message: "You cannot manage this user" });
+    }
+
+    const { restricted, accountIds } = req.body ?? {};
+    if (typeof restricted !== "boolean") {
+      return res.status(400).json({ message: "restricted (boolean) is required" });
+    }
+    if (restricted && !Array.isArray(accountIds)) {
+      return res.status(400).json({ message: "accountIds (array) is required when restricted is true" });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("DELETE FROM user_account_access WHERE user_id = ?", [id]);
+      if (restricted) {
+        for (const accountId of accountIds as number[]) {
+          await conn.query("INSERT INTO user_account_access (user_id, account_id) VALUES (?, ?)", [id, accountId]);
+        }
+      }
+      await conn.commit();
+    } catch (err: any) {
+      await conn.rollback();
+      if (err?.code === "ER_NO_REFERENCED_ROW_2") {
+        return res.status(400).json({ message: "One of the selected accounts does not exist" });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    const updatedIds = await getUserAccountIds(id, target.role);
+    res.json({ restricted: updatedIds !== null, accountIds: updatedIds ?? [] });
   })
 );
 

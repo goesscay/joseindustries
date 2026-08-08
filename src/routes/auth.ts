@@ -4,6 +4,7 @@ import { comparePassword } from "../utils/password";
 import { signToken } from "../utils/jwt";
 import { requireAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
+import { getUserPermissions, getUserAccountIds } from "../utils/permissions";
 import { User } from "../types";
 
 export const authRouter = Router();
@@ -16,9 +17,21 @@ const COOKIE_OPTIONS = {
   path: "/",
 };
 
-function toPublicUser(user: User) {
+// Bundles the user's access grants into their /me and /login response so
+// the client can gate the nav/buttons immediately, without a second round
+// trip. Cheap even for super_admin/admin (getUserPermissions short-circuits
+// to "not restricted" for them without a query).
+async function buildUserPayload(user: User) {
   const { password_hash, ...publicUser } = user;
-  return publicUser;
+  const [permissions, accountAccess] = await Promise.all([
+    getUserPermissions(user.id, user.role),
+    getUserAccountIds(user.id, user.role),
+  ]);
+  return {
+    ...publicUser,
+    permissions,
+    accountAccess: { restricted: accountAccess !== null, accountIds: accountAccess ?? [] },
+  };
 }
 
 authRouter.post("/login", asyncHandler(async (req, res) => {
@@ -41,7 +54,7 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
 
   const token = signToken({ sub: user.id, role: user.role });
   res.cookie("token", token, COOKIE_OPTIONS);
-  res.json({ user: toPublicUser(user) });
+  res.json({ user: await buildUserPayload(user) });
 }));
 
 authRouter.post("/logout", (_req, res) => {
@@ -57,5 +70,5 @@ authRouter.get("/me", requireAuth, asyncHandler(async (req, res) => {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
-  res.json({ user: toPublicUser(user) });
+  res.json({ user: await buildUserPayload(user) });
 }));

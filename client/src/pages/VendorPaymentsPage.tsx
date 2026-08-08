@@ -19,7 +19,7 @@ const PAYMENT_MODE_OPTIONS: { value: PaymentMode; label: string }[] = [
 ];
 
 export function VendorPaymentsPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [payments, setPayments] = useState<VendorPayment[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -36,7 +36,9 @@ export function VendorPaymentsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("expenses.vendor_payments", "create");
+  const canEdit = can("expenses.vendor_payments", "edit");
+  const canDelete = can("expenses.vendor_payments", "delete");
   const selectedVendorId = Form.useWatch("vendor_id", form);
   const selectedCompanyId = Form.useWatch("company_id", form);
 
@@ -164,7 +166,11 @@ export function VendorPaymentsPage() {
       width: 110,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this payment?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -191,9 +197,11 @@ export function VendorPaymentsPage() {
             }}
             style={{ width: 220 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New Payment
-          </Button>
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New Payment
+            </Button>
+          )}
         </Space>
       </Space>
 

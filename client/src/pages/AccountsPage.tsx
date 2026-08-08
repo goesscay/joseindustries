@@ -34,7 +34,7 @@ const SOURCE_LABELS: Record<LedgerEntry["source_type"], string> = {
 };
 
 export function AccountsPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(false);
@@ -58,7 +58,9 @@ export function AccountsPage() {
   const [entrySaving, setEntrySaving] = useState(false);
   const [entryForm] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("banking.accounts", "create");
+  const canEdit = can("banking.accounts", "edit");
+  const canDelete = can("banking.accounts", "delete");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -264,7 +266,11 @@ export function AccountsPage() {
       render: (_, record) => (
         <Space size="small">
           <Button size="small" icon={<BookOutlined />} onClick={() => openLedger(record)} title="View Ledger" />
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this account?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -321,9 +327,11 @@ export function AccountsPage() {
           <Button icon={<SwapOutlined />} onClick={openTransfer}>
             Transfer
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            Add Account
-          </Button>
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              Add Account
+            </Button>
+          )}
         </Space>
       </Space>
 

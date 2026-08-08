@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { TermsTemplate, TermsTemplateDocType } from "../types";
 
 export const termsTemplatesRouter = Router();
+const MODULE = "settings.terms_conditions";
 termsTemplatesRouter.use(requireAuth);
 
 const DOC_TYPES: TermsTemplateDocType[] = ["all", "quotation", "proforma_invoice", "delivery_challan", "tax_invoice"];
@@ -16,6 +18,7 @@ async function findById(id: number): Promise<TermsTemplate | undefined> {
 
 termsTemplatesRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const docType = typeof req.query.docType === "string" ? req.query.docType : undefined;
     if (docType && !DOC_TYPES.includes(docType as TermsTemplateDocType)) {
@@ -33,6 +36,7 @@ termsTemplatesRouter.get(
 
 termsTemplatesRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { title, doc_type, content, is_default } = req.body ?? {};
     if (!title) return res.status(400).json({ message: "Title is required" });
@@ -50,6 +54,7 @@ termsTemplatesRouter.post(
 
 termsTemplatesRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
@@ -71,7 +76,7 @@ termsTemplatesRouter.put(
 
 termsTemplatesRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

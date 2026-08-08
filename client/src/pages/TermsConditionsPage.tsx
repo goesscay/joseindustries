@@ -44,9 +44,10 @@ const DOC_TYPE_LABELS: Record<TermsTemplateDocType, string> = Object.fromEntries
 ) as Record<TermsTemplateDocType, string>;
 
 export function TermsConditionsPage() {
-  const { user } = useAuth();
-  const canEdit = user?.role === "super_admin" || user?.role === "admin";
-  const canDelete = canEdit;
+  const { can } = useAuth();
+  const canCreate = can("settings.terms_conditions", "create");
+  const canEdit = can("settings.terms_conditions", "edit");
+  const canDelete = can("settings.terms_conditions", "delete");
 
   // ---- Section 1: per-company fallback wording (used when a document has
   // no template-derived text of its own) ----
@@ -216,7 +217,7 @@ export function TermsConditionsPage() {
       </Typography.Text>
 
       <div style={{ marginTop: 12, marginBottom: 16 }}>
-        {canEdit && (
+        {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             Add Template
           </Button>

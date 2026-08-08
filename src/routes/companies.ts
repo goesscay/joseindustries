@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { Company } from "../types";
 
 export const companiesRouter = Router();
+const MODULE = "settings.company_profile";
 
 companiesRouter.use(requireAuth);
 
@@ -13,6 +15,14 @@ async function findCompanyById(id: number): Promise<Company | undefined> {
   return rows[0] as Company | undefined;
 }
 
+// Deliberately NOT gated by MODULE view: the company list is basic
+// reference data (name/code/GSTIN) needed to populate the "Company"
+// dropdown on almost every business form across the app (Quotations,
+// Receipts, Expenses, Accounts...), not just the Settings > Company
+// Profile screen. Gating it would risk breaking those unrelated forms for
+// a staff member who's simply never been granted the Settings module.
+// Editing company details below is the actually sensitive action, and
+// that stays gated.
 companiesRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
@@ -32,7 +42,7 @@ companiesRouter.get(
 
 companiesRouter.put(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findCompanyById(id);

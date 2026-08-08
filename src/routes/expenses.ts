@@ -1,11 +1,13 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { Company, Expense, Vendor } from "../types";
 
 export const expensesRouter = Router();
+const MODULE = "expenses.expenses";
 expensesRouter.use(requireAuth);
 
 const PAID_AMOUNT_SUBQUERY =
@@ -21,6 +23,7 @@ async function findById(id: number): Promise<Expense | undefined> {
 
 expensesRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -53,6 +56,7 @@ expensesRouter.get(
 
 expensesRouter.get(
   "/:id",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const expense = await findById(Number(req.params.id));
     if (!expense) return res.status(404).json({ message: "Expense not found" });
@@ -91,6 +95,7 @@ async function validatePayload(body: any) {
 
 expensesRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const result = await validatePayload(req.body);
     if ("error" in result) return res.status(400).json({ message: result.error });
@@ -130,6 +135,7 @@ expensesRouter.post(
 
 expensesRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
@@ -169,7 +175,7 @@ expensesRouter.put(
 
 expensesRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

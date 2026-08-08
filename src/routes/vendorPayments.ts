@@ -1,11 +1,13 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
-import { Company, Expense, PaymentMode, Vendor, VendorPayment } from "../types";
+import { Company, Expense, PaymentMode, Role, Vendor, VendorPayment } from "../types";
 
 export const vendorPaymentsRouter = Router();
+const MODULE = "expenses.vendor_payments";
 vendorPaymentsRouter.use(requireAuth);
 
 const PAYMENT_MODES: PaymentMode[] = ["cash", "cheque", "bank_transfer", "upi", "card", "other"];
@@ -17,6 +19,7 @@ async function findById(id: number): Promise<VendorPayment | undefined> {
 
 vendorPaymentsRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -49,6 +52,7 @@ vendorPaymentsRouter.get(
 
 vendorPaymentsRouter.get(
   "/:id",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const payment = await findById(Number(req.params.id));
     if (!payment) return res.status(404).json({ message: "Vendor payment not found" });
@@ -56,7 +60,7 @@ vendorPaymentsRouter.get(
   })
 );
 
-async function validatePayload(body: any) {
+async function validatePayload(body: any, userId: number, userRole: Role) {
   const { company_id, vendor_id, expense_id, account_id, amount, payment_mode, paid_date } = body ?? {};
 
   if (!company_id || !vendor_id || !amount || !payment_mode || !paid_date) {
@@ -94,6 +98,9 @@ async function validatePayload(body: any) {
     if (account.company_id !== Number(company_id)) {
       return { error: "Selected account does not belong to this company" };
     }
+    if (!(await canAccessAccount(userId, userRole, Number(account_id)))) {
+      return { error: "You don't have access to this account" };
+    }
   }
 
   return { company, vendor, expense };
@@ -101,8 +108,9 @@ async function validatePayload(body: any) {
 
 vendorPaymentsRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
-    const result = await validatePayload(req.body);
+    const result = await validatePayload(req.body, req.user!.sub, req.user!.role);
     if ("error" in result) return res.status(400).json({ message: result.error });
     const { company } = result;
 
@@ -137,12 +145,13 @@ vendorPaymentsRouter.post(
 
 vendorPaymentsRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
     if (!existing) return res.status(404).json({ message: "Vendor payment not found" });
 
-    const result = await validatePayload(req.body);
+    const result = await validatePayload(req.body, req.user!.sub, req.user!.role);
     if ("error" in result) return res.status(400).json({ message: result.error });
 
     const { vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
@@ -173,7 +182,7 @@ vendorPaymentsRouter.put(
 
 vendorPaymentsRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

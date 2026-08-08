@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { Customer } from "../types";
 
 export const customersRouter = Router();
+const MODULE = "contacts.customers";
 
 customersRouter.use(requireAuth);
 
@@ -15,6 +17,7 @@ async function findCustomerById(id: number): Promise<Customer | undefined> {
 
 customersRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -39,6 +42,7 @@ customersRouter.get(
 
 customersRouter.get(
   "/:id",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const customer = await findCustomerById(Number(req.params.id));
     if (!customer) return res.status(404).json({ message: "Customer not found" });
@@ -48,6 +52,7 @@ customersRouter.get(
 
 customersRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { name, gstin, phone, email, billing_address, shipping_address, state } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
@@ -64,6 +69,7 @@ customersRouter.post(
 
 customersRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findCustomerById(id);
@@ -84,7 +90,7 @@ customersRouter.put(
 
 customersRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findCustomerById(id);

@@ -32,7 +32,7 @@ const PAYMENT_MODE_OPTIONS: { value: PaymentMode; label: string }[] = [
 ];
 
 export function ReceiptsPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -49,7 +49,9 @@ export function ReceiptsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("sales.receipts", "create");
+  const canEdit = can("sales.receipts", "edit");
+  const canDelete = can("sales.receipts", "delete");
   const selectedCustomerId = Form.useWatch("customer_id", form);
   const selectedCompanyId = Form.useWatch("company_id", form);
 
@@ -184,7 +186,11 @@ export function ReceiptsPage() {
       width: 130,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           <Button size="small" icon={<FilePdfOutlined />} onClick={() => downloadPdf(record)} />
           {canDelete && (
             <Popconfirm title="Delete this receipt?" onConfirm={() => handleDelete(record)}>
@@ -212,9 +218,11 @@ export function ReceiptsPage() {
             }}
             style={{ width: 220 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New Receipt
-          </Button>
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New Receipt
+            </Button>
+          )}
         </Space>
       </Space>
 

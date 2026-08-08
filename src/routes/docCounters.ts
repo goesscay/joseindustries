@@ -1,14 +1,17 @@
 import { Router } from "express";
 import { pool } from "../config/db";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { DocCounter } from "../types";
 
 export const docCountersRouter = Router();
+const MODULE = "settings.document_numbering";
 docCountersRouter.use(requireAuth);
 
 docCountersRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (_req, res) => {
     const [rows] = await pool.query<any[]>(
       `SELECT dc.*, co.name as company_name

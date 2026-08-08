@@ -1,6 +1,25 @@
 export type Role = "super_admin" | "admin" | "staff";
 export type Status = "active" | "inactive";
 
+export interface ModuleAccess {
+  can_view: boolean;
+  can_create: boolean;
+  can_edit: boolean;
+  can_delete: boolean;
+}
+
+export interface UserPermissions {
+  /** false = unrestricted (full access to every module) - see utils/permissions.ts on the server for the fallback contract. */
+  restricted: boolean;
+  modules: Record<string, ModuleAccess>;
+}
+
+export interface UserAccountAccess {
+  /** false = unrestricted (sees/uses every Bank & Cash account). */
+  restricted: boolean;
+  accountIds: number[];
+}
+
 export interface AppUser {
   id: number;
   name: string;
@@ -9,6 +28,8 @@ export interface AppUser {
   status: Status;
   created_at: string;
   updated_at: string;
+  permissions: UserPermissions;
+  accountAccess: UserAccountAccess;
 }
 
 export interface Company {

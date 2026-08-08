@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { PaymentTerm } from "../types";
 
 export const paymentTermsRouter = Router();
+const MODULE = "settings.payment_terms";
 paymentTermsRouter.use(requireAuth);
 
 async function findById(id: number): Promise<PaymentTerm | undefined> {
@@ -14,6 +16,7 @@ async function findById(id: number): Promise<PaymentTerm | undefined> {
 
 paymentTermsRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (_req, res) => {
     const [rows] = await pool.query<any[]>("SELECT * FROM payment_terms ORDER BY label ASC");
     res.json({ data: rows as PaymentTerm[] });
@@ -22,6 +25,7 @@ paymentTermsRouter.get(
 
 paymentTermsRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { label } = req.body ?? {};
     if (!label) return res.status(400).json({ message: "label is required" });
@@ -41,6 +45,7 @@ paymentTermsRouter.post(
 
 paymentTermsRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
@@ -64,7 +69,7 @@ paymentTermsRouter.put(
 
 paymentTermsRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

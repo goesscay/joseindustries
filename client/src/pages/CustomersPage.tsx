@@ -9,7 +9,7 @@ import { Customer } from "../types";
 const PAGE_SIZE = 10;
 
 export function CustomersPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -20,7 +20,9 @@ export function CustomersPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("contacts.customers", "create");
+  const canEdit = can("contacts.customers", "edit");
+  const canDelete = can("contacts.customers", "delete");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,7 +96,11 @@ export function CustomersPage() {
       width: 110,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this customer?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -121,9 +127,11 @@ export function CustomersPage() {
             }}
             style={{ width: 220 }}
           />
+          {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             Add Customer
           </Button>
+          )}
         </Space>
       </Space>
 

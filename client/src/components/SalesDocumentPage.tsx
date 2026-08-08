@@ -51,6 +51,15 @@ const API_PATH_TO_DOC_TYPE: Record<string, TermsTemplateDocType> = {
   "/tax-invoices": "tax_invoice",
 };
 
+// Maps this component's apiPath prop to its permission module key (see
+// constants/permissions.ts) for the create/edit/delete button gating below.
+const API_PATH_TO_MODULE: Record<string, string> = {
+  "/quotations": "sales.quotations",
+  "/proforma-invoices": "sales.proforma_invoices",
+  "/delivery-challans": "sales.delivery_challans",
+  "/tax-invoices": "sales.tax_invoices",
+};
+
 const DEFAULT_STATUS_LABELS: Record<DocStatus, string> = {
   draft: "Draft",
   sent: "Sent",
@@ -104,10 +113,13 @@ export function SalesDocumentPage({
   restrictedToRoles,
   showPaymentStatus,
 }: SalesDocumentPageProps) {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const navigate = useNavigate();
   const labels = { ...DEFAULT_STATUS_LABELS, ...statusLabels };
-  const canManage = !restrictedToRoles || (user ? restrictedToRoles.includes(user.role) : false);
+  const permissionModule = API_PATH_TO_MODULE[apiPath];
+  const roleAllows = !restrictedToRoles || (user ? restrictedToRoles.includes(user.role) : false);
+  const canCreate = roleAllows && can(permissionModule, "create");
+  const canEdit = roleAllows && can(permissionModule, "edit");
 
   const [rows, setRows] = useState<SalesDocument[]>([]);
   const [total, setTotal] = useState(0);
@@ -133,7 +145,7 @@ export function SalesDocumentPage({
   const freightWatch = Form.useWatch("freight_charges", form) as number | undefined;
   const installationWatch = Form.useWatch("installation_charges", form) as number | undefined;
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canDelete = can(permissionModule, "delete");
   const availableConvertTargets = (convertTargets ?? []).filter(
     (t) => !t.allowedRoles || (user && t.allowedRoles.includes(user.role))
   );
@@ -431,13 +443,13 @@ export function SalesDocumentPage({
       width: 190,
       render: (_, record) => (
         <Space size="small">
-          {canManage ? (
+          {canEdit ? (
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
           ) : (
             <Button size="small" icon={<EditOutlined />} disabled title="View only" />
           )}
           <Button size="small" icon={<FilePdfOutlined />} onClick={() => downloadPdf(record)} />
-          {canManage && availableConvertTargets.length > 0 && record.status === "accepted" && (
+          {canCreate && availableConvertTargets.length > 0 && record.status === "accepted" && (
             <Dropdown
               menu={{
                 items: availableConvertTargets.map((t) => ({
@@ -450,7 +462,7 @@ export function SalesDocumentPage({
               <Button size="small" icon={<SwapOutlined />} />
             </Dropdown>
           )}
-          {canManage && canDelete && record.status === "draft" && (
+          {canDelete && record.status === "draft" && (
             <Popconfirm title={`Delete this ${title.toLowerCase()}?`} onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
             </Popconfirm>
@@ -482,7 +494,7 @@ export function SalesDocumentPage({
             }}
             style={{ width: 220 }}
           />
-          {canManage && (
+          {canCreate && (
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
               New {title}
             </Button>

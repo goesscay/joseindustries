@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { ExpenseCategory } from "../types";
 
 export const expenseCategoriesRouter = Router();
+const MODULE = "expenses.expense_categories";
 
 expenseCategoriesRouter.use(requireAuth);
 
@@ -16,6 +18,7 @@ async function findById(id: number): Promise<ExpenseCategory | undefined> {
 // Short lookup list - no pagination, just the full set ordered by name.
 expenseCategoriesRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (_req, res) => {
     const [rows] = await pool.query<any[]>("SELECT * FROM expense_categories ORDER BY name ASC");
     res.json({ data: rows as ExpenseCategory[] });
@@ -24,6 +27,7 @@ expenseCategoriesRouter.get(
 
 expenseCategoriesRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { name } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
@@ -43,6 +47,7 @@ expenseCategoriesRouter.post(
 
 expenseCategoriesRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
@@ -66,7 +71,7 @@ expenseCategoriesRouter.put(
 
 expenseCategoriesRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

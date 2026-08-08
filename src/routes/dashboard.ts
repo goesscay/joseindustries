@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 
 export const dashboardRouter = Router();
-dashboardRouter.use(requireAuth);
+dashboardRouter.use(requireAuth, requireModuleAccess("dashboard", "view"));
 
 const DOC_TYPE_LABELS: Record<string, string> = {
   quotation: "Quotation",

@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { Item } from "../types";
 
 export const itemsRouter = Router();
+const MODULE = "items.items";
 
 itemsRouter.use(requireAuth);
 
@@ -15,6 +17,7 @@ async function findItemById(id: number): Promise<Item | undefined> {
 
 itemsRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -39,6 +42,7 @@ itemsRouter.get(
 
 itemsRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { name, hsn_code, unit, default_rate, tax_rate } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
@@ -54,6 +58,7 @@ itemsRouter.post(
 
 itemsRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findItemById(id);
@@ -73,7 +78,7 @@ itemsRouter.put(
 
 itemsRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findItemById(id);

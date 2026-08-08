@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { streamReceiptPdf } from "../services/pdf/receiptPdf";
-import { Company, Customer, DocumentRecord, PaymentMode, Receipt } from "../types";
+import { Company, Customer, DocumentRecord, PaymentMode, Receipt, Role } from "../types";
 
 export const receiptsRouter = Router();
+const MODULE = "sales.receipts";
 receiptsRouter.use(requireAuth);
 
 const PAYMENT_MODES: PaymentMode[] = ["cash", "cheque", "bank_transfer", "upi", "card", "other"];
@@ -18,6 +20,7 @@ async function findById(id: number): Promise<Receipt | undefined> {
 
 receiptsRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -50,6 +53,7 @@ receiptsRouter.get(
 
 receiptsRouter.get(
   "/:id",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (req, res) => {
     const receipt = await findById(Number(req.params.id));
     if (!receipt) return res.status(404).json({ message: "Receipt not found" });
@@ -57,7 +61,7 @@ receiptsRouter.get(
   })
 );
 
-async function validatePayload(body: any) {
+async function validatePayload(body: any, userId: number, userRole: Role) {
   const { company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, received_date } = body ?? {};
 
   if (!company_id || !customer_id || !amount || !payment_mode || !received_date) {
@@ -98,6 +102,9 @@ async function validatePayload(body: any) {
     if (account.company_id !== Number(company_id)) {
       return { error: "Selected account does not belong to this company" };
     }
+    if (!(await canAccessAccount(userId, userRole, Number(account_id)))) {
+      return { error: "You don't have access to this account" };
+    }
   }
 
   return { company, customer, invoice };
@@ -105,8 +112,9 @@ async function validatePayload(body: any) {
 
 receiptsRouter.post(
   "/",
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
-    const result = await validatePayload(req.body);
+    const result = await validatePayload(req.body, req.user!.sub, req.user!.role);
     if ("error" in result) return res.status(400).json({ message: result.error });
     const { company } = result;
 
@@ -141,12 +149,13 @@ receiptsRouter.post(
 
 receiptsRouter.put(
   "/:id",
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
     if (!existing) return res.status(404).json({ message: "Receipt not found" });
 
-    const result = await validatePayload(req.body);
+    const result = await validatePayload(req.body, req.user!.sub, req.user!.role);
     if ("error" in result) return res.status(400).json({ message: result.error });
 
     const { company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes } =
@@ -178,7 +187,7 @@ receiptsRouter.put(
 
 receiptsRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { PaymentTerm } from "../types";
 
 export function PaymentTermsPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [terms, setTerms] = useState<PaymentTerm[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -15,7 +15,9 @@ export function PaymentTermsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("settings.payment_terms", "create");
+  const canEdit = can("settings.payment_terms", "edit");
+  const canDelete = can("settings.payment_terms", "delete");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,7 +85,11 @@ export function PaymentTermsPage() {
       width: 110,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this payment term?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -106,9 +112,11 @@ export function PaymentTermsPage() {
             and Tax Invoices.
           </Typography.Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Add Term
-        </Button>
+        {canCreate && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            Add Term
+          </Button>
+        )}
       </Space>
 
       <Table rowKey="id" columns={columns} dataSource={terms} loading={loading} size="small" pagination={false} />

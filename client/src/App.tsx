@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { ModuleGate } from "./components/ModuleGate";
 import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { HomePage } from "./pages/HomePage";
@@ -29,25 +30,74 @@ function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/quotations" element={<QuotationsPage />} />
-          <Route path="/proforma-invoices" element={<ProformaInvoicesPage />} />
-          <Route path="/delivery-challans" element={<DeliveryChallansPage />} />
-          <Route path="/tax-invoices" element={<TaxInvoicesPage />} />
-          <Route path="/receipts" element={<ReceiptsPage />} />
-          <Route path="/customers" element={<CustomersPage />} />
-          <Route path="/items" element={<ItemsPage />} />
-          <Route path="/companies" element={<CompaniesPage />} />
-          <Route path="/vendors" element={<VendorsPage />} />
-          <Route path="/expenses" element={<ExpensesPage />} />
-          <Route path="/vendor-payments" element={<VendorPaymentsPage />} />
-          <Route path="/expense-categories" element={<ExpenseCategoriesPage />} />
-          <Route path="/accounts" element={<AccountsPage />} />
-          <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/settings/tax-rates" element={<TaxRatesPage />} />
-          <Route path="/settings/payment-terms" element={<PaymentTermsPage />} />
-          <Route path="/settings/document-numbering" element={<DocumentNumberingPage />} />
-          <Route path="/settings/terms-conditions" element={<TermsConditionsPage />} />
+          <Route path="/" element={<ModuleGate module="dashboard"><HomePage /></ModuleGate>} />
+          <Route path="/quotations" element={<ModuleGate module="sales.quotations"><QuotationsPage /></ModuleGate>} />
+          <Route
+            path="/proforma-invoices"
+            element={
+              <ModuleGate module="sales.proforma_invoices">
+                <ProformaInvoicesPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/delivery-challans"
+            element={
+              <ModuleGate module="sales.delivery_challans">
+                <DeliveryChallansPage />
+              </ModuleGate>
+            }
+          />
+          <Route path="/tax-invoices" element={<ModuleGate module="sales.tax_invoices"><TaxInvoicesPage /></ModuleGate>} />
+          <Route path="/receipts" element={<ModuleGate module="sales.receipts"><ReceiptsPage /></ModuleGate>} />
+          <Route path="/customers" element={<ModuleGate module="contacts.customers"><CustomersPage /></ModuleGate>} />
+          <Route path="/items" element={<ModuleGate module="items.items"><ItemsPage /></ModuleGate>} />
+          <Route path="/companies" element={<ModuleGate module="settings.company_profile"><CompaniesPage /></ModuleGate>} />
+          <Route path="/vendors" element={<ModuleGate module="contacts.vendors"><VendorsPage /></ModuleGate>} />
+          <Route path="/expenses" element={<ModuleGate module="expenses.expenses"><ExpensesPage /></ModuleGate>} />
+          <Route
+            path="/vendor-payments"
+            element={
+              <ModuleGate module="expenses.vendor_payments">
+                <VendorPaymentsPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/expense-categories"
+            element={
+              <ModuleGate module="expenses.expense_categories">
+                <ExpenseCategoriesPage />
+              </ModuleGate>
+            }
+          />
+          <Route path="/accounts" element={<ModuleGate module="banking.accounts"><AccountsPage /></ModuleGate>} />
+          <Route path="/reports" element={<ModuleGate module="reports.reports"><ReportsPage /></ModuleGate>} />
+          <Route path="/settings/tax-rates" element={<ModuleGate module="settings.tax_gst"><TaxRatesPage /></ModuleGate>} />
+          <Route
+            path="/settings/payment-terms"
+            element={
+              <ModuleGate module="settings.payment_terms">
+                <PaymentTermsPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/settings/document-numbering"
+            element={
+              <ModuleGate module="settings.document_numbering">
+                <DocumentNumberingPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/settings/terms-conditions"
+            element={
+              <ModuleGate module="settings.terms_conditions">
+                <TermsConditionsPage />
+              </ModuleGate>
+            }
+          />
           <Route element={<ProtectedRoute allowedRoles={["super_admin", "admin"]} />}>
             <Route path="/users" element={<UsersPage />} />
           </Route>

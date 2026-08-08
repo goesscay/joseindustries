@@ -400,3 +400,46 @@ INSERT IGNORE INTO terms_and_conditions_templates (id, title, doc_type, content,
 -- when left blank - same fallback chain as before this table existed.
 ALTER TABLE documents
   ADD COLUMN IF NOT EXISTS terms_and_conditions TEXT NULL;
+
+-- Fine-grained module/action permissions, layered on top of the existing
+-- role system rather than replacing it. super_admin and admin ALWAYS have
+-- full access to every module and account (see src/utils/permissions.ts) -
+-- these tables only ever get consulted for 'staff'.
+--
+-- Fallback contract (important for not breaking anyone on deploy): a staff
+-- user with ZERO rows in user_permissions has full, unrestricted access to
+-- every module - identical to today's behaviour before this table existed.
+-- The moment an admin saves ANY row for that user, the user flips into
+-- "allowlist mode": any module without a row (or with a false flag) is
+-- denied for that action. This means existing staff accounts are completely
+-- unaffected until an admin deliberately opens the new Access tab and
+-- configures them.
+CREATE TABLE IF NOT EXISTS user_permissions (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  module_key VARCHAR(60) NOT NULL,
+  can_view BOOLEAN NOT NULL DEFAULT FALSE,
+  can_create BOOLEAN NOT NULL DEFAULT FALSE,
+  can_edit BOOLEAN NOT NULL DEFAULT FALSE,
+  can_delete BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_user_module (user_id, module_key),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Same fallback contract as above, scoped to individual Bank & Cash
+-- accounts: zero rows for a user = unrestricted (sees/uses every account,
+-- today's behaviour); any row present = allowlist of exactly those
+-- accounts. Lets an admin hand a staff member (e.g. a cashier) access to
+-- just the one till/account they handle, without touching every other
+-- account in the books.
+CREATE TABLE IF NOT EXISTS user_account_access (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  account_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_user_account (user_id, account_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);

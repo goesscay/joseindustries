@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { TaxRate } from "../types";
 
 export function TaxRatesPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [taxRates, setTaxRates] = useState<TaxRate[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -15,7 +15,10 @@ export function TaxRatesPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canManage = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("settings.tax_gst", "create");
+  const canEdit = can("settings.tax_gst", "edit");
+  const canDelete = can("settings.tax_gst", "delete");
+  const canManage = canEdit || canDelete;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,10 +95,16 @@ export function TaxRatesPage() {
       render: (_, record) =>
         canManage && (
           <Space size="small">
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-            <Popconfirm title="Delete this tax rate?" onConfirm={() => handleDelete(record)}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
-            </Popconfirm>
+            {canEdit ? (
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+            ) : (
+              <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+            )}
+            {canDelete && (
+              <Popconfirm title="Delete this tax rate?" onConfirm={() => handleDelete(record)}>
+                <Button size="small" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            )}
           </Space>
         ),
     },
@@ -113,7 +122,7 @@ export function TaxRatesPage() {
             automatically from company/customer state, never set manually here.
           </Typography.Text>
         </div>
-        {canManage && (
+        {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             Add Rate
           </Button>

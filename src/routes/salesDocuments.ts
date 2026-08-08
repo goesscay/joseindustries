@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../config/db";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { computeLine, computeTotals, LineInput } from "../utils/totals";
@@ -9,11 +10,26 @@ import { streamDocumentPdf } from "../services/pdf/documentPdf";
 import { Company, Customer, DocType, DocumentItem, DocumentRecord, Role } from "../types";
 
 export interface SalesDocumentRouterOptions {
-  /** If set, only these roles may create/edit this document type (default: any authenticated role). */
+  /**
+   * If set, only these roles may create/edit this document type, no matter
+   * what a staff member's granted module permissions say - a hard business
+   * rule (e.g. only Admin/Super Admin may issue a legally-binding Tax
+   * Invoice), layered UNDER the normal module permission check rather than
+   * replacing it. Leave unset for document types where the usual
+   * view/create/edit/delete grants (see utils/permissions.ts) are the only
+   * gate.
+   */
   createRoles?: Role[];
   /** If set, list/detail responses include paid_amount/balance_due from the receipts table. */
   includePaymentSummary?: boolean;
 }
+
+const MODULE_BY_DOC_TYPE: Partial<Record<DocType, string>> = {
+  quotation: "sales.quotations",
+  proforma_invoice: "sales.proforma_invoices",
+  delivery_challan: "sales.delivery_challans",
+  tax_invoice: "sales.tax_invoices",
+};
 
 class ValidationError extends Error {
   status = 400;
@@ -102,6 +118,7 @@ export function createSalesDocumentRouter(
   const router = Router();
   router.use(requireAuth);
 
+  const MODULE = MODULE_BY_DOC_TYPE[docType] ?? "sales.quotations";
   const createGuard = options.createRoles ? [requireRole(...options.createRoles)] : [];
   const paymentSelect = options.includePaymentSummary
     ? ", COALESCE((SELECT SUM(r.amount) FROM receipts r WHERE r.tax_invoice_id = d.id), 0) as paid_amount"
@@ -125,6 +142,7 @@ export function createSalesDocumentRouter(
 
   router.get(
     "/",
+    requireModuleAccess(MODULE, "view"),
     asyncHandler(async (req, res) => {
       const page = Math.max(Number(req.query.page) || 1, 1);
       const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
@@ -158,6 +176,7 @@ export function createSalesDocumentRouter(
 
   router.get(
     "/:id",
+    requireModuleAccess(MODULE, "view"),
     asyncHandler(async (req, res) => {
       const doc = await findById(Number(req.params.id));
       if (!doc) return res.status(404).json({ message: `${title} not found` });
@@ -169,6 +188,7 @@ export function createSalesDocumentRouter(
   router.post(
     "/",
     ...createGuard,
+    requireModuleAccess(MODULE, "create"),
     asyncHandler(async (req, res) => {
       const { company_id, customer_id, issue_date, notes, items, converted_from_id, reverse_charge, freight_charges, installation_charges } =
         req.body ?? {};
@@ -317,6 +337,7 @@ export function createSalesDocumentRouter(
   router.put(
     "/:id",
     ...createGuard,
+    requireModuleAccess(MODULE, "edit"),
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
       const existing = await findById(id);
@@ -447,6 +468,7 @@ export function createSalesDocumentRouter(
 
   router.patch(
     "/:id/status",
+    requireModuleAccess(MODULE, "edit"),
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
       const { status } = req.body ?? {};
@@ -465,7 +487,7 @@ export function createSalesDocumentRouter(
 
   router.delete(
     "/:id",
-    requireRole("super_admin", "admin"),
+    requireModuleAccess(MODULE, "delete"),
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
       const existing = await findById(id);
@@ -480,6 +502,7 @@ export function createSalesDocumentRouter(
 
   router.get(
     "/:id/pdf",
+    requireModuleAccess(MODULE, "view"),
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
       const doc = await findById(id);

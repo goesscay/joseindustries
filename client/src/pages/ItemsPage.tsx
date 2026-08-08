@@ -9,7 +9,7 @@ import { Item } from "../types";
 const PAGE_SIZE = 10;
 
 export function ItemsPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [items, setItems] = useState<Item[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -20,7 +20,9 @@ export function ItemsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("items.items", "create");
+  const canEdit = can("items.items", "edit");
+  const canDelete = can("items.items", "delete");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,7 +102,11 @@ export function ItemsPage() {
       width: 110,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this item?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -127,9 +133,11 @@ export function ItemsPage() {
             }}
             style={{ width: 220 }}
           />
+          {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             Add Item
           </Button>
+          )}
         </Space>
       </Space>
 

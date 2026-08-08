@@ -31,6 +31,7 @@ import {
   SafetyOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
+import { ROUTE_MODULE } from "../constants/routeModules";
 import logo from "../assets/logo-black.png";
 
 const { Header, Sider, Content } = Layout;
@@ -47,14 +48,14 @@ const KEY_ALIASES: Record<string, string> = {
 };
 
 export function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout, can } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const navItems: NavItem[] = useMemo(
+  const rawNavItems: NavItem[] = useMemo(
     () =>
       user
         ? [
@@ -127,6 +128,26 @@ export function AppLayout() {
           ]
         : [],
     [user]
+  );
+
+  // Drop any leaf the user can't view (per their module permissions), then
+  // drop any group left with no children - keeps the sidebar honest about
+  // what a restricted staff member can actually get to.
+  const navItems: NavItem[] = useMemo(
+    () =>
+      rawNavItems
+        .filter((item) => item && "key" in item && (!ROUTE_MODULE[String(item.key)] || can(ROUTE_MODULE[String(item.key)], "view")))
+        .map((item) => {
+          if (item && "children" in item && item.children) {
+            const children = item.children.filter(
+              (child) => child && "key" in child && (!ROUTE_MODULE[String(child.key)] || can(ROUTE_MODULE[String(child.key)], "view"))
+            );
+            return { ...item, children };
+          }
+          return item;
+        })
+        .filter((item) => !(item && "children" in item && item.children && item.children.length === 0)),
+    [rawNavItems, can]
   );
 
   // Every leaf route key, paired with the id of the group it lives in - used

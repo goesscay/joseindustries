@@ -6,14 +6,14 @@ import { useAuth } from "../context/AuthContext";
 import { Company } from "../types";
 
 export function CompaniesPage() {
-  const { user } = useAuth();
+  const { can } = useAuth();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canEdit = user?.role === "super_admin" || user?.role === "admin";
+  const canEdit = can("settings.company_profile", "edit");
 
   async function load() {
     setLoading(true);

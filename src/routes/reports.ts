@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 
 export const reportsRouter = Router();
-reportsRouter.use(requireAuth);
+// Every route here is a read - one router-level gate covers all of them.
+reportsRouter.use(requireAuth, requireModuleAccess("reports.reports", "view"));
 
 function dateRange(query: any): { from: string; to: string } {
   const to = typeof query.to === "string" && query.to ? query.to : new Date().toISOString().slice(0, 10);

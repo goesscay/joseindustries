@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { pool } from "../config/db";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { TaxRate } from "../types";
 
 export const taxRatesRouter = Router();
+const MODULE = "settings.tax_gst";
 taxRatesRouter.use(requireAuth);
 
 async function findById(id: number): Promise<TaxRate | undefined> {
@@ -14,6 +16,7 @@ async function findById(id: number): Promise<TaxRate | undefined> {
 
 taxRatesRouter.get(
   "/",
+  requireModuleAccess(MODULE, "view"),
   asyncHandler(async (_req, res) => {
     const [rows] = await pool.query<any[]>("SELECT * FROM tax_rates ORDER BY rate ASC");
     res.json({ data: rows as TaxRate[] });
@@ -22,7 +25,7 @@ taxRatesRouter.get(
 
 taxRatesRouter.post(
   "/",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { label, rate, is_default } = req.body ?? {};
     if (!label || rate === undefined || rate === null) {
@@ -53,7 +56,7 @@ taxRatesRouter.post(
 
 taxRatesRouter.put(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);
@@ -90,7 +93,7 @@ taxRatesRouter.put(
 
 taxRatesRouter.delete(
   "/:id",
-  requireRole("super_admin", "admin"),
+  requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await findById(id);

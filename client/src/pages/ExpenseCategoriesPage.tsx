@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { ExpenseCategory } from "../types";
 
 export function ExpenseCategoriesPage() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -15,7 +15,9 @@ export function ExpenseCategoriesPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
-  const canDelete = user?.role === "super_admin" || user?.role === "admin";
+  const canCreate = can("expenses.expense_categories", "create");
+  const canEdit = can("expenses.expense_categories", "edit");
+  const canDelete = can("expenses.expense_categories", "delete");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,7 +85,11 @@ export function ExpenseCategoriesPage() {
       width: 110,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          {canEdit ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          ) : (
+            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+          )}
           {canDelete && (
             <Popconfirm title="Delete this category?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -100,9 +106,11 @@ export function ExpenseCategoriesPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           Expense Categories
         </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Add Category
-        </Button>
+        {canCreate && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            Add Category
+          </Button>
+        )}
       </Space>
 
       <Table
