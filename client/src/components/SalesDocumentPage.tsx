@@ -773,10 +773,12 @@ export function SalesDocumentPage({
                             <td>
                               <Select
                                 allowClear
+                                showSearch
                                 placeholder="From catalog"
                                 size="small"
                                 style={{ width: "100%" }}
                                 options={items.map((i) => ({ value: i.id, label: i.name }))}
+                                filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
                                 onChange={(value) => value && handleItemSelect(name, value)}
                               />
                             </td>
