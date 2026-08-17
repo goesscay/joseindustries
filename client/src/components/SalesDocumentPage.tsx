@@ -26,6 +26,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, SwapOutlin
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { QuickAddCustomerModal } from "./QuickAddCustomerModal";
 import {
   Company,
   Customer,
@@ -120,6 +121,7 @@ export function SalesDocumentPage({
   const roleAllows = !restrictedToRoles || (user ? restrictedToRoles.includes(user.role) : false);
   const canCreate = roleAllows && can(permissionModule, "create");
   const canEdit = roleAllows && can(permissionModule, "edit");
+  const canCreateCustomer = can("contacts.customers", "create");
 
   const [rows, setRows] = useState<SalesDocument[]>([]);
   const [total, setTotal] = useState(0);
@@ -136,6 +138,7 @@ export function SalesDocumentPage({
   const applicableTemplates = termsTemplates.filter((t) => t.doc_type === "all" || t.doc_type === docType);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [quickAddCustomerOpen, setQuickAddCustomerOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<SalesDocument | null>(null);
   const [convertTarget, setConvertTarget] = useState<ConvertTarget | null>(null);
   const [convertSourceId, setConvertSourceId] = useState<number | null>(null);
@@ -529,13 +532,24 @@ export function SalesDocumentPage({
               </Form.Item>
             </Col>
             <Col xs={24} sm={10}>
-              <Form.Item name="customer_id" label="Customer" rules={[{ required: true, message: "Customer is required" }]}>
-                <Select
-                  showSearch
-                  placeholder="Select customer"
-                  options={customers.map((c) => ({ value: c.id, label: c.name }))}
-                  filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
-                />
+              <Form.Item label="Customer" required>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Form.Item
+                    name="customer_id"
+                    rules={[{ required: true, message: "Customer is required" }]}
+                    style={{ flex: 1, marginBottom: 0 }}
+                  >
+                    <Select
+                      showSearch
+                      placeholder="Select customer"
+                      options={customers.map((c) => ({ value: c.id, label: c.name }))}
+                      filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+                    />
+                  </Form.Item>
+                  {canCreateCustomer && (
+                    <Button icon={<PlusOutlined />} onClick={() => setQuickAddCustomerOpen(true)} title="Add new customer" />
+                  )}
+                </div>
               </Form.Item>
             </Col>
             <Col xs={24} sm={6}>
@@ -865,6 +879,16 @@ export function SalesDocumentPage({
           </div>
         </Form>
       </Modal>
+
+      <QuickAddCustomerModal
+        open={quickAddCustomerOpen}
+        onClose={() => setQuickAddCustomerOpen(false)}
+        onCreated={(customer) => {
+          setCustomers((prev) => [customer, ...prev]);
+          form.setFieldsValue({ customer_id: customer.id });
+          setQuickAddCustomerOpen(false);
+        }}
+      />
     </div>
   );
 }

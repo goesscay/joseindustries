@@ -18,6 +18,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined } from "@an
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { QuickAddCustomerModal } from "../components/QuickAddCustomerModal";
 import { Account, Company, Customer, PaymentMode, Receipt, SalesDocument } from "../types";
 
 const PAGE_SIZE = 10;
@@ -45,6 +46,7 @@ export function ReceiptsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [quickAddCustomerOpen, setQuickAddCustomerOpen] = useState(false);
   const [editing, setEditing] = useState<Receipt | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
@@ -52,6 +54,7 @@ export function ReceiptsPage() {
   const canCreate = can("sales.receipts", "create");
   const canEdit = can("sales.receipts", "edit");
   const canDelete = can("sales.receipts", "delete");
+  const canCreateCustomer = can("contacts.customers", "create");
   const selectedCustomerId = Form.useWatch("customer_id", form);
   const selectedCompanyId = Form.useWatch("company_id", form);
 
@@ -253,14 +256,25 @@ export function ReceiptsPage() {
               onChange={() => form.setFieldsValue({ account_id: undefined })}
             />
           </Form.Item>
-          <Form.Item name="customer_id" label="Customer" rules={[{ required: true, message: "Customer is required" }]}>
-            <Select
-              showSearch
-              placeholder="Select customer"
-              options={customers.map((c) => ({ value: c.id, label: c.name }))}
-              filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
-              onChange={() => form.setFieldsValue({ tax_invoice_id: undefined })}
-            />
+          <Form.Item label="Customer" required>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Form.Item
+                name="customer_id"
+                rules={[{ required: true, message: "Customer is required" }]}
+                style={{ flex: 1, marginBottom: 0 }}
+              >
+                <Select
+                  showSearch
+                  placeholder="Select customer"
+                  options={customers.map((c) => ({ value: c.id, label: c.name }))}
+                  filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+                  onChange={() => form.setFieldsValue({ tax_invoice_id: undefined })}
+                />
+              </Form.Item>
+              {canCreateCustomer && (
+                <Button icon={<PlusOutlined />} onClick={() => setQuickAddCustomerOpen(true)} title="Add new customer" />
+              )}
+            </div>
           </Form.Item>
           <Form.Item name="tax_invoice_id" label="Against Tax Invoice (optional)">
             <Select allowClear showSearch placeholder="Select invoice" options={invoiceOptions} filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())} />
@@ -285,6 +299,16 @@ export function ReceiptsPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <QuickAddCustomerModal
+        open={quickAddCustomerOpen}
+        onClose={() => setQuickAddCustomerOpen(false)}
+        onCreated={(customer) => {
+          setCustomers((prev) => [customer, ...prev]);
+          form.setFieldsValue({ customer_id: customer.id });
+          setQuickAddCustomerOpen(false);
+        }}
+      />
     </div>
   );
 }
