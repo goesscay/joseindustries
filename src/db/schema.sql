@@ -443,3 +443,45 @@ CREATE TABLE IF NOT EXISTS user_account_access (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
+
+-- Sales pipeline entry point, upstream of Customers/Quotations: a prospect
+-- gets tracked here (source, pipeline stage, estimated value, follow-up)
+-- before there's a real deal worth turning into a Customer record. Fields
+-- match the standard CRM lead-capture set (contact details, qualification,
+-- ownership, address/tax so a converted Customer needs no re-entry).
+CREATE TABLE IF NOT EXISTS leads (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  contact_person VARCHAR(255) NULL,
+  designation VARCHAR(100) NULL,
+  phone VARCHAR(20) NULL,
+  email VARCHAR(255) NULL,
+
+  source ENUM('website', 'referral', 'cold_call', 'walk_in', 'advertisement', 'social_media', 'trade_show', 'existing_customer', 'other')
+    NOT NULL DEFAULT 'other',
+  status ENUM('new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost') NOT NULL DEFAULT 'new',
+  industry VARCHAR(100) NULL,
+  estimated_value DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  expected_close_date DATE NULL,
+  lost_reason VARCHAR(255) NULL,
+
+  gstin VARCHAR(15) NULL,
+  state VARCHAR(100) NULL,
+  address TEXT NULL,
+
+  assigned_to INT UNSIGNED NULL,
+  next_follow_up_date DATE NULL,
+  notes TEXT NULL,
+
+  -- Set once this lead becomes a real Customer (see POST /leads/:id/convert)
+  -- - kept even if the lead is later edited, as the paper trail of where
+  -- that Customer came from.
+  converted_customer_id INT UNSIGNED NULL,
+
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (converted_customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);

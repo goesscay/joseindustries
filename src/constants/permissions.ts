@@ -15,6 +15,7 @@ export interface ModuleDef {
 export const PERMISSION_MODULES: ModuleDef[] = [
   { key: "dashboard", label: "Dashboard", group: "Dashboard" },
 
+  { key: "sales.leads", label: "Leads", group: "Sales" },
   { key: "sales.quotations", label: "Quotations", group: "Sales" },
   { key: "sales.proforma_invoices", label: "Proforma Invoices", group: "Sales" },
   { key: "sales.delivery_challans", label: "Delivery Challans", group: "Sales" },

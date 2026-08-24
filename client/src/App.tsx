@@ -5,6 +5,7 @@ import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { HomePage } from "./pages/HomePage";
 import { UsersPage } from "./pages/UsersPage";
+import { LeadsPage } from "./pages/LeadsPage";
 import { CustomersPage } from "./pages/CustomersPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
@@ -31,6 +32,7 @@ function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<ModuleGate module="dashboard"><HomePage /></ModuleGate>} />
+          <Route path="/leads" element={<ModuleGate module="sales.leads"><LeadsPage /></ModuleGate>} />
           <Route path="/quotations" element={<ModuleGate module="sales.quotations"><QuotationsPage /></ModuleGate>} />
           <Route
             path="/proforma-invoices"

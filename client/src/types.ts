@@ -35,6 +35,44 @@ export interface AppUser {
   accessRestricted?: boolean;
 }
 
+export type LeadSource =
+  | "website"
+  | "referral"
+  | "cold_call"
+  | "walk_in"
+  | "advertisement"
+  | "social_media"
+  | "trade_show"
+  | "existing_customer"
+  | "other";
+export type LeadStatus = "new" | "contacted" | "qualified" | "proposal" | "negotiation" | "won" | "lost";
+
+export interface Lead {
+  id: number;
+  name: string;
+  contact_person: string | null;
+  designation: string | null;
+  phone: string | null;
+  email: string | null;
+  source: LeadSource;
+  status: LeadStatus;
+  industry: string | null;
+  estimated_value: string;
+  expected_close_date: string | null;
+  lost_reason: string | null;
+  gstin: string | null;
+  state: string | null;
+  address: string | null;
+  assigned_to: number | null;
+  assigned_to_name?: string;
+  next_follow_up_date: string | null;
+  notes: string | null;
+  converted_customer_id: number | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Company {
   id: number;
   code: string;

@@ -12,6 +12,7 @@ import { PermissionAction } from "./permissions";
 // view wins.
 export const ROUTE_MODULE: Record<string, string> = {
   "/": "dashboard",
+  "/leads": "sales.leads",
   "/quotations": "sales.quotations",
   "/proforma-invoices": "sales.proforma_invoices",
   "/delivery-challans": "sales.delivery_challans",

@@ -29,6 +29,7 @@ import {
   NumberOutlined,
   FileProtectOutlined,
   SafetyOutlined,
+  UserAddOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { ROUTE_MODULE } from "../constants/routeModules";
@@ -65,6 +66,7 @@ export function AppLayout() {
               icon: <ShoppingCartOutlined />,
               label: "Sales",
               children: [
+                { key: "/leads", icon: <UserAddOutlined />, label: "Leads" },
                 { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
                 { key: "/proforma-invoices", icon: <FileDoneOutlined />, label: "Proforma Invoices" },
                 { key: "/delivery-challans", icon: <CarOutlined />, label: "Delivery Challans" },
