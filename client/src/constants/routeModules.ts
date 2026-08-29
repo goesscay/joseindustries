@@ -20,6 +20,7 @@ export const ROUTE_MODULE: Record<string, string> = {
   "/receipts": "sales.receipts",
   "/expenses": "expenses.expenses",
   "/vendor-payments": "expenses.vendor_payments",
+  "/purchases/orders": "purchases.orders",
   "/purchases/bills": "purchases.bills",
   "/expense-categories": "expenses.expense_categories",
   "/accounts": "banking.accounts",

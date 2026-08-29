@@ -306,11 +306,59 @@ export interface PurchaseBill {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+  /** Only present on the list/detail endpoints - the originating Purchase
+   * Order's number, when purchase_order_id is set (Phase 7B). */
+  source_po_no?: string | null;
 }
 
 export interface PurchaseBillItem {
   id?: number;
   purchase_bill_id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  taxable_amount: number;
+  tax_amount: number;
+  line_total: number;
+  sort_order?: number;
+}
+
+// ---- Phase 7B: Purchase Orders - a commitment/order document with NO
+// accounting relationship (see schema.sql's comment on purchase_orders).
+// Structurally mirrors PurchaseBill/PurchaseBillItem exactly. ----
+
+export type PurchaseOrderStatus = "draft" | "confirmed" | "cancelled";
+
+export interface PurchaseOrder {
+  id: number;
+  po_no: string;
+  financial_year: string;
+  company_id: number;
+  vendor_id: number;
+  status: PurchaseOrderStatus;
+  po_date: string;
+  expected_date: string | null;
+  reference_no: string | null;
+  notes: string | null;
+  subtotal: string;
+  tax_amount: string;
+  total_amount: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  /** Only present on the list/detail endpoints - the Purchase Bill this PO
+   * was converted to, if any (a query-derived fact, never a cached column). */
+  billed_bill_no?: string | null;
+  billed_bill_id?: number | null;
+}
+
+export interface PurchaseOrderItem {
+  id?: number;
+  purchase_order_id?: number;
   item_id: number | null;
   description: string;
   hsn_code: string | null;

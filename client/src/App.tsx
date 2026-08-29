@@ -18,6 +18,7 @@ import { VendorsPage } from "./pages/VendorsPage";
 import { ExpenseCategoriesPage } from "./pages/ExpenseCategoriesPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { VendorPaymentsPage } from "./pages/VendorPaymentsPage";
+import { PurchaseOrdersPage } from "./pages/PurchaseOrdersPage";
 import { PurchaseBillsPage } from "./pages/PurchaseBillsPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
@@ -64,6 +65,14 @@ function App() {
             element={
               <ModuleGate module="expenses.vendor_payments">
                 <VendorPaymentsPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/purchases/orders"
+            element={
+              <ModuleGate module="purchases.orders">
+                <PurchaseOrdersPage />
               </ModuleGate>
             }
           />

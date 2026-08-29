@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
   Table,
   Button,
@@ -14,35 +14,25 @@ import {
   Popconfirm,
   Typography,
   Tag,
-  Alert,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, SwapOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import {
-  Company,
-  Item,
-  PurchaseBill,
-  PurchaseBillItem,
-  PurchaseBillStatus,
-  PurchaseOrder,
-  PurchaseOrderItem,
-  Vendor,
-} from "../types";
+import { Company, Item, PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus, Vendor } from "../types";
 
 const PAGE_SIZE = 10;
 
-const STATUS_LABELS: Record<PurchaseBillStatus, string> = {
+const STATUS_LABELS: Record<PurchaseOrderStatus, string> = {
   draft: "Draft",
-  received: "Received",
+  confirmed: "Confirmed",
   cancelled: "Cancelled",
 };
 
-const STATUS_COLORS: Record<PurchaseBillStatus, string> = {
+const STATUS_COLORS: Record<PurchaseOrderStatus, string> = {
   draft: "default",
-  received: "success",
+  confirmed: "processing",
   cancelled: "default",
 };
 
@@ -60,11 +50,10 @@ interface LineFormValue {
   tax_rate: number;
 }
 
-export function PurchaseBillsPage() {
+export function PurchaseOrdersPage() {
   const { can } = useAuth();
-  const location = useLocation();
   const navigate = useNavigate();
-  const [bills, setBills] = useState<PurchaseBill[]>([]);
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
@@ -75,32 +64,26 @@ export function PurchaseBillsPage() {
   const [items, setItems] = useState<Item[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<PurchaseBill | null>(null);
-  // Set only while converting a Purchase Order into a bill - the form
-  // shows these fields read-only, since the backend re-reads the PO's own
-  // vendor/lines fresh from the database at submit time and ignores
-  // whatever is in the form for those fields regardless (see
-  // purchaseBills.ts's resolvePurchaseOrderSource) - editing them here
-  // would just be misleading, not actually change what gets billed.
-  const [convertingFromPO, setConvertingFromPO] = useState<PurchaseOrder | null>(null);
+  const [editing, setEditing] = useState<PurchaseOrder | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const lineItems = Form.useWatch("items", form) as LineFormValue[] | undefined;
 
-  const canCreate = can("purchases.bills", "create");
-  const canEdit = can("purchases.bills", "edit");
-  const canDelete = can("purchases.bills", "delete");
+  const canCreate = can("purchases.orders", "create");
+  const canEdit = can("purchases.orders", "edit");
+  const canDelete = can("purchases.orders", "delete");
+  const canCreateBill = can("purchases.bills", "create");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get<{ data: PurchaseBill[]; meta: { total: number } }>(
-        `/purchase-bills?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}`
+      const res = await api.get<{ data: PurchaseOrder[]; meta: { total: number } }>(
+        `/purchase-orders?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}`
       );
-      setBills(res.data);
+      setOrders(res.data);
       setTotal(res.meta.total);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "Failed to load purchase bills");
+      message.error(err instanceof Error ? err.message : "Failed to load purchase orders");
     } finally {
       setLoading(false);
     }
@@ -134,10 +117,9 @@ export function PurchaseBillsPage() {
 
   function openCreate() {
     setEditing(null);
-    setConvertingFromPO(null);
     form.resetFields();
     form.setFieldsValue({
-      bill_date: dayjs(),
+      po_date: dayjs(),
       company_id: companies[0]?.id,
       status: "draft",
       items: [{ item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, tax_rate: 18 }],
@@ -145,55 +127,18 @@ export function PurchaseBillsPage() {
     setModalOpen(true);
   }
 
-  function openConvert(order: PurchaseOrder, orderItems: PurchaseOrderItem[]) {
-    setEditing(null);
-    setConvertingFromPO(order);
-    form.resetFields();
-    form.setFieldsValue({
-      company_id: order.company_id,
-      vendor_id: order.vendor_id,
-      bill_date: dayjs(),
-      reference_no: order.reference_no,
-      status: "draft",
-      items: orderItems.map((i) => ({
-        item_id: i.item_id,
-        description: i.description,
-        hsn_code: i.hsn_code,
-        qty: Number(i.qty),
-        unit: i.unit,
-        rate: Number(i.rate),
-        tax_rate: Number(i.tax_rate),
-      })),
-    });
-    setModalOpen(true);
-  }
-
-  // Arriving here via PurchaseOrdersPage's "Convert to Bill" button (router
-  // state, not a URL param - this is presentation only, the actual
-  // conversion is validated fresh server-side on submit). Consumed once,
-  // then cleared from history so a page refresh doesn't reopen the modal.
-  useEffect(() => {
-    const state = location.state as { convertFromPO?: PurchaseOrder; convertFromPOItems?: PurchaseOrderItem[] } | null;
-    if (state?.convertFromPO) {
-      openConvert(state.convertFromPO, state.convertFromPOItems ?? []);
-      navigate(location.pathname, { replace: true, state: null });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state]);
-
-  async function openEdit(record: PurchaseBill) {
+  async function openEdit(record: PurchaseOrder) {
     try {
-      const res = await api.get<{ bill: PurchaseBill; items: PurchaseBillItem[] }>(`/purchase-bills/${record.id}`);
-      setEditing(res.bill);
-      setConvertingFromPO(null);
+      const res = await api.get<{ order: PurchaseOrder; items: PurchaseOrderItem[] }>(`/purchase-orders/${record.id}`);
+      setEditing(res.order);
       form.setFieldsValue({
-        company_id: res.bill.company_id,
-        vendor_id: res.bill.vendor_id,
-        bill_date: dayjs(res.bill.bill_date),
-        due_date: res.bill.due_date ? dayjs(res.bill.due_date) : undefined,
-        reference_no: res.bill.reference_no,
-        notes: res.bill.notes,
-        status: res.bill.status,
+        company_id: res.order.company_id,
+        vendor_id: res.order.vendor_id,
+        po_date: dayjs(res.order.po_date),
+        expected_date: res.order.expected_date ? dayjs(res.order.expected_date) : undefined,
+        reference_no: res.order.reference_no,
+        notes: res.order.notes,
+        status: res.order.status,
         items: res.items.map((i) => ({
           item_id: i.item_id,
           description: i.description,
@@ -206,7 +151,7 @@ export function PurchaseBillsPage() {
       });
       setModalOpen(true);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "Failed to load purchase bill");
+      message.error(err instanceof Error ? err.message : "Failed to load purchase order");
     }
   }
 
@@ -230,89 +175,103 @@ export function PurchaseBillsPage() {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
+      const payload = {
         ...values,
-        bill_date: values.bill_date.format("YYYY-MM-DD"),
-        due_date: values.due_date ? values.due_date.format("YYYY-MM-DD") : null,
+        po_date: values.po_date.format("YYYY-MM-DD"),
+        expected_date: values.expected_date ? values.expected_date.format("YYYY-MM-DD") : null,
       };
-      if (convertingFromPO) {
-        payload.purchase_order_id = convertingFromPO.id;
-      }
       if (editing) {
-        const res = await api.put<{ bill: PurchaseBill; journal: { id: number } | null }>(`/purchase-bills/${editing.id}`, payload);
-        message.success(res.journal ? `Purchase bill updated (Journal #${res.journal.id} posted)` : "Purchase bill updated");
+        await api.put(`/purchase-orders/${editing.id}`, payload);
+        message.success("Purchase order updated");
       } else {
-        const res = await api.post<{ bill: PurchaseBill; journal: { id: number } | null }>("/purchase-bills", payload);
-        message.success(
-          res.journal
-            ? `Purchase bill ${res.bill.bill_no} created (Journal #${res.journal.id} posted)`
-            : "Purchase bill created"
-        );
+        await api.post("/purchase-orders", payload);
+        message.success("Purchase order created");
       }
       setModalOpen(false);
-      setConvertingFromPO(null);
       load();
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "Failed to save purchase bill");
+      message.error(err instanceof Error ? err.message : "Failed to save purchase order");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete(record: PurchaseBill) {
+  async function handleDelete(record: PurchaseOrder) {
     try {
-      await api.delete(`/purchase-bills/${record.id}`);
-      message.success("Purchase bill deleted");
+      await api.delete(`/purchase-orders/${record.id}`);
+      message.success("Purchase order deleted");
       load();
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "Failed to delete purchase bill");
+      message.error(err instanceof Error ? err.message : "Failed to delete purchase order");
     }
   }
 
-  const columns: ColumnsType<PurchaseBill> = [
-    { title: "No.", dataIndex: "bill_no", key: "bill_no" },
+  async function handleConvert(record: PurchaseOrder) {
+    try {
+      const res = await api.get<{ order: PurchaseOrder; items: PurchaseOrderItem[] }>(`/purchase-orders/${record.id}`);
+      // The frontend only prefills for the user's convenience - the backend
+      // re-reads the PO's own current vendor/lines fresh from the database
+      // and ignores anything sent for those fields, so there's no risk of
+      // this prefill silently drifting from what actually gets billed.
+      navigate("/purchases/bills", { state: { convertFromPO: res.order, convertFromPOItems: res.items } });
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load purchase order");
+    }
+  }
+
+  const columns: ColumnsType<PurchaseOrder> = [
+    { title: "No.", dataIndex: "po_no", key: "po_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
     { title: "Vendor", dataIndex: "vendor_name", key: "vendor_name" },
+    { title: "PO Date", dataIndex: "po_date", key: "po_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
     {
-      title: "Purchase Order",
-      dataIndex: "source_po_no",
-      key: "source_po_no",
-      render: (v: string | null) => (v ? <Tag color="blue">{v}</Tag> : "-"),
-    },
-    { title: "Bill Date", dataIndex: "bill_date", key: "bill_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
-    {
-      title: "Due Date",
-      dataIndex: "due_date",
-      key: "due_date",
+      title: "Expected",
+      dataIndex: "expected_date",
+      key: "expected_date",
       render: (d: string | null) => (d ? dayjs(d).format("DD MMM YYYY") : "-"),
     },
-    { title: "Subtotal", dataIndex: "subtotal", key: "subtotal", render: (v: string) => `Rs. ${Number(v).toFixed(2)}` },
-    { title: "Tax", dataIndex: "tax_amount", key: "tax_amount", render: (v: string) => `Rs. ${Number(v).toFixed(2)}` },
     { title: "Total", dataIndex: "total_amount", key: "total_amount", render: (v: string) => `Rs. ${Number(v).toFixed(2)}` },
     {
       title: "Status",
       dataIndex: "status",
       key: "status",
-      render: (status: PurchaseBillStatus) => <Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>,
+      render: (status: PurchaseOrderStatus) => <Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>,
+    },
+    {
+      title: "Billed",
+      key: "billed",
+      render: (_, record) =>
+        record.billed_bill_no ? <Tag color="success">{record.billed_bill_no}</Tag> : <Tag>Not billed</Tag>,
     },
     {
       title: "Actions",
       key: "actions",
-      width: 110,
-      render: (_, record) => (
-        <Space size="small">
-          {canEdit ? (
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-          ) : (
-            <Button size="small" icon={<EditOutlined />} disabled title="View only" />
-          )}
-          {canDelete && record.status === "draft" && (
-            <Popconfirm title="Delete this purchase bill?" onConfirm={() => handleDelete(record)}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+      width: 160,
+      render: (_, record) => {
+        const billed = !!record.billed_bill_id;
+        return (
+          <Space size="small">
+            {canEdit ? (
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                disabled={billed || record.status === "cancelled"}
+                onClick={() => openEdit(record)}
+              />
+            ) : (
+              <Button size="small" icon={<EditOutlined />} disabled title="View only" />
+            )}
+            {canCreateBill && !billed && record.status !== "cancelled" && (
+              <Button size="small" icon={<SwapOutlined />} onClick={() => handleConvert(record)} title="Convert to Purchase Bill" />
+            )}
+            {canDelete && !billed && record.status === "draft" && (
+              <Popconfirm title="Delete this purchase order?" onConfirm={() => handleDelete(record)}>
+                <Button size="small" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -320,7 +279,7 @@ export function PurchaseBillsPage() {
     <div>
       <Space style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }} wrap>
         <Typography.Title level={4} style={{ margin: 0 }}>
-          Purchase Bills
+          Purchase Orders
         </Typography.Title>
         <Space>
           <Input.Search
@@ -334,7 +293,7 @@ export function PurchaseBillsPage() {
           />
           {canCreate && (
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              New Purchase Bill
+              New Purchase Order
             </Button>
           )}
         </Space>
@@ -343,21 +302,15 @@ export function PurchaseBillsPage() {
       <Table
         rowKey="id"
         columns={columns}
-        dataSource={bills}
+        dataSource={orders}
         loading={loading}
         size="small"
-        scroll={{ x: 900 }}
+        scroll={{ x: 1000 }}
         pagination={{ current: page, pageSize: PAGE_SIZE, total, onChange: setPage, showSizeChanger: false }}
       />
 
       <Modal
-        title={
-          editing
-            ? `Edit ${editing.bill_no}`
-            : convertingFromPO
-              ? `New Purchase Bill (from ${convertingFromPO.po_no})`
-              : "New Purchase Bill"
-        }
+        title={editing ? `Edit ${editing.po_no}` : "New Purchase Order"}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={handleSubmit}
@@ -366,27 +319,6 @@ export function PurchaseBillsPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical" size="middle">
-          {convertingFromPO && (
-            <Alert
-              style={{ marginBottom: 16 }}
-              type="info"
-              showIcon
-              message={`Converting Purchase Order ${convertingFromPO.po_no}`}
-              description="Vendor and line items are locked to exactly match the order - the server always re-reads them fresh from the Purchase Order when converting, so editing them here wouldn't change what actually gets billed. Only the bill date, due date, reference and notes are yours to set."
-            />
-          )}
-          {!convertingFromPO && editing?.source_po_no && (
-            <Alert
-              style={{ marginBottom: 16 }}
-              type="info"
-              message={
-                <>
-                  Converted from Purchase Order <b>{editing.source_po_no}</b>
-                </>
-              }
-            />
-          )}
-
           <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
             <Form.Item
               name="company_id"
@@ -397,7 +329,6 @@ export function PurchaseBillsPage() {
               <Select
                 placeholder="Select company"
                 style={{ width: "100%" }}
-                disabled={!!convertingFromPO}
                 options={companies.map((c) => ({ value: c.id, label: c.name }))}
               />
             </Form.Item>
@@ -411,7 +342,6 @@ export function PurchaseBillsPage() {
                 showSearch
                 placeholder="Select vendor"
                 style={{ width: "100%" }}
-                disabled={!!convertingFromPO}
                 options={vendors.map((v) => ({ value: v.id, label: v.name }))}
                 filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
               />
@@ -419,25 +349,25 @@ export function PurchaseBillsPage() {
             <Form.Item name="status" label="Status" style={{ width: "30%", marginBottom: 0 }}>
               <Select
                 style={{ width: "100%" }}
-                options={(Object.keys(STATUS_LABELS) as PurchaseBillStatus[]).map((s) => ({ value: s, label: STATUS_LABELS[s] }))}
+                options={(Object.keys(STATUS_LABELS) as PurchaseOrderStatus[]).map((s) => ({ value: s, label: STATUS_LABELS[s] }))}
               />
             </Form.Item>
           </Space.Compact>
 
           <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
             <Form.Item
-              name="bill_date"
-              label="Bill Date"
-              rules={[{ required: true, message: "Bill date is required" }]}
+              name="po_date"
+              label="PO Date"
+              rules={[{ required: true, message: "PO date is required" }]}
               style={{ width: "34%", marginBottom: 0 }}
             >
               <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
             </Form.Item>
-            <Form.Item name="due_date" label="Due Date" style={{ width: "33%", marginBottom: 0 }}>
+            <Form.Item name="expected_date" label="Expected Date" style={{ width: "33%", marginBottom: 0 }}>
               <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item name="reference_no" label="Reference No" style={{ width: "33%", marginBottom: 0 }}>
-              <Input placeholder="Vendor's own bill/invoice no" />
+              <Input placeholder="Optional reference" />
             </Form.Item>
           </Space.Compact>
 
@@ -477,7 +407,6 @@ export function PurchaseBillsPage() {
                                 placeholder="From catalog"
                                 size="small"
                                 style={{ width: "100%" }}
-                                disabled={!!convertingFromPO}
                                 options={items.map((i) => ({ value: i.id, label: i.name }))}
                                 filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
                                 onChange={(value) => value && handleItemSelect(name, value)}
@@ -489,32 +418,32 @@ export function PurchaseBillsPage() {
                                 rules={[{ required: true, message: "Required" }]}
                                 style={{ marginBottom: 0 }}
                               >
-                                <Input size="small" placeholder="Description" disabled={!!convertingFromPO} />
+                                <Input size="small" placeholder="Description" />
                               </Form.Item>
                             </td>
                             <td>
                               <Form.Item name={[name, "hsn_code"]} style={{ marginBottom: 0 }}>
-                                <Input size="small" placeholder="HSN" disabled={!!convertingFromPO} />
+                                <Input size="small" placeholder="HSN" />
                               </Form.Item>
                             </td>
                             <td>
                               <Form.Item name={[name, "qty"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0.01} style={{ width: "100%" }} disabled={!!convertingFromPO} />
+                                <InputNumber size="small" min={0.01} style={{ width: "100%" }} />
                               </Form.Item>
                             </td>
                             <td>
                               <Form.Item name={[name, "rate"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0} style={{ width: "100%" }} disabled={!!convertingFromPO} />
+                                <InputNumber size="small" min={0} style={{ width: "100%" }} />
                               </Form.Item>
                             </td>
                             <td>
                               <Form.Item name={[name, "tax_rate"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} disabled={!!convertingFromPO} />
+                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
                               </Form.Item>
                             </td>
                             <td style={{ whiteSpace: "nowrap" }}>{lineTotal.toFixed(2)}</td>
                             <td>
-                              {fields.length > 1 && !convertingFromPO && (
+                              {fields.length > 1 && (
                                 <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => remove(name)} />
                               )}
                             </td>
@@ -532,17 +461,15 @@ export function PurchaseBillsPage() {
                     </tbody>
                   </table>
                 </div>
-                {!convertingFromPO && (
-                  <Button
-                    type="dashed"
-                    size="small"
-                    icon={<PlusOutlined />}
-                    style={{ marginTop: 8 }}
-                    onClick={() => add({ item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, tax_rate: 18 })}
-                  >
-                    Add Line
-                  </Button>
-                )}
+                <Button
+                  type="dashed"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  style={{ marginTop: 8 }}
+                  onClick={() => add({ item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, tax_rate: 18 })}
+                >
+                  Add Line
+                </Button>
               </div>
             )}
           </Form.List>

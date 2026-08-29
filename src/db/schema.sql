@@ -865,3 +865,66 @@ CREATE TABLE IF NOT EXISTS purchase_bill_items (
   FOREIGN KEY (purchase_bill_id) REFERENCES purchase_bills(id) ON DELETE CASCADE,
   FOREIGN KEY (item_id) REFERENCES items(id)
 );
+
+-- Phase 7B: Purchase Orders - a commitment/order document, NOT an
+-- accounting liability. Deliberately has no relationship whatsoever to
+-- src/services/accounting.ts - no journal, no journal_lines, no AP
+-- movement, ever. An exact structural mirror of purchase_bills/
+-- purchase_bill_items (same fields, same shapes) so that "convert to
+-- bill" is just copying rows across, not a bespoke transform. Status is
+-- deliberately minimal (draft/confirmed/cancelled) - "billed" is a
+-- DERIVED fact (whether any purchase_bills row has this purchase_order_id),
+-- never a stored status, so there's no separate "Partially Billed"/"Fully
+-- Billed" bookkeeping to keep in sync. Full conversion only in this phase
+-- (Phase 7B) - one PO converts to at most one Purchase Bill - enforced at
+-- the application layer (purchaseBills.ts's POST), not by a DB unique
+-- constraint, so the data model stays one-to-many-ready for a future
+-- partial-billing phase without a schema change.
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  po_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  vendor_id INT UNSIGNED NOT NULL,
+  status ENUM('draft', 'confirmed', 'cancelled') NOT NULL DEFAULT 'draft',
+  po_date DATE NOT NULL,
+  expected_date DATE NULL,
+  reference_no VARCHAR(100) NULL,
+  notes TEXT NULL,
+  subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_purchase_order_no (po_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  purchase_order_id INT UNSIGNED NOT NULL,
+  item_id INT UNSIGNED NULL,
+  description VARCHAR(255) NOT NULL,
+  hsn_code VARCHAR(20) NULL,
+  qty DECIMAL(10, 2) NOT NULL DEFAULT 1,
+  unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+  rate DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  taxable_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  line_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+  FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  FOREIGN KEY (item_id) REFERENCES items(id)
+);
+
+-- purchase_bills.purchase_order_id (Phase 7A) had no index yet - now that
+-- the conversion flow needs "does a bill already reference this PO"
+-- lookups (duplicate-conversion protection) and "which bill did this PO
+-- produce" lookups (the PO -> Bill UI relationship), it earns one. Still
+-- no FK (purchase_orders didn't exist when that column was added) and
+-- still no uniqueness (one-to-many-ready for future partial billing).
+ALTER TABLE purchase_bills ADD INDEX IF NOT EXISTS idx_purchase_bills_po (purchase_order_id);

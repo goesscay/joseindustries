@@ -24,6 +24,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   { key: "expenses.vendor_payments", label: "Vendor Payments", group: "Expenses" },
   { key: "expenses.expense_categories", label: "Expense Categories", group: "Expenses" },
 
+  { key: "purchases.orders", label: "Purchase Orders", group: "Purchases" },
   { key: "purchases.bills", label: "Purchase Bills", group: "Purchases" },
 
   { key: "banking.accounts", label: "Bank & Cash", group: "Banking" },

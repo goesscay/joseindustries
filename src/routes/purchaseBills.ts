@@ -17,8 +17,17 @@ export const purchaseBillsRouter = Router();
 const MODULE = "purchases.bills";
 purchaseBillsRouter.use(requireAuth);
 
+// source_po_no (Phase 7B) is a derived join, not a stored/cached field -
+// same "query the relationship, don't cache it" approach as
+// purchaseOrders.ts's billed_bill_no.
 async function findById(id: number): Promise<PurchaseBill | undefined> {
-  const [rows] = await pool.query<any[]>("SELECT * FROM purchase_bills WHERE id = ? LIMIT 1", [id]);
+  const [rows] = await pool.query<any[]>(
+    `SELECT b.*, po.po_no as source_po_no
+     FROM purchase_bills b
+     LEFT JOIN purchase_orders po ON po.id = b.purchase_order_id
+     WHERE b.id = ? LIMIT 1`,
+    [id]
+  );
   return rows[0] as PurchaseBill | undefined;
 }
 
@@ -94,6 +103,71 @@ async function validatePayload(body: any) {
   return { company, vendor, lines };
 }
 
+/**
+ * Phase 7B: PO -> Purchase Bill conversion. The frontend may prefill its
+ * form from a Purchase Order, but that is presentation only - the backend
+ * never trusts the submitted vendor_id/items when purchase_order_id is
+ * present. Instead it re-reads the PO's own current row + line items
+ * fresh from the database (on `conn`, inside the caller's transaction,
+ * with the PO row locked FOR UPDATE) and builds the bill from THOSE,
+ * ignoring whatever the client sent for vendor/items - "full conversion"
+ * means the bill is always an exact, authoritative copy of the PO at
+ * conversion time, never something that can silently contradict it.
+ *
+ * The FOR UPDATE lock on the PO row is what makes duplicate-conversion
+ * protection race-safe: two concurrent "Convert to Bill" requests for the
+ * same PO serialize on this lock, so the second one's "does a bill already
+ * exist" check runs only after the first has committed (and therefore sees
+ * the first bill), rather than both checking a stale "no bill yet" state.
+ */
+async function resolvePurchaseOrderSource(
+  conn: import("mysql2/promise").PoolConnection,
+  purchaseOrderId: number,
+  billCompanyId: number
+) {
+  const [poRows] = await conn.query<any[]>("SELECT * FROM purchase_orders WHERE id = ? FOR UPDATE", [purchaseOrderId]);
+  const po = poRows[0];
+  if (!po) return { error: "Purchase order not found" };
+  if (Number(po.company_id) !== Number(billCompanyId)) {
+    return { error: "This purchase order does not belong to the selected company" };
+  }
+  if (po.status === "cancelled") {
+    return { error: "This purchase order has been cancelled and cannot be converted" };
+  }
+
+  const [existingBillRows] = await conn.query<any[]>(
+    "SELECT id, bill_no FROM purchase_bills WHERE purchase_order_id = ?",
+    [purchaseOrderId]
+  );
+  if (existingBillRows.length > 0) {
+    return { error: `This purchase order has already been converted to Purchase Bill ${existingBillRows[0].bill_no}` };
+  }
+
+  const [vendorRows] = await conn.query<any[]>("SELECT * FROM vendors WHERE id = ?", [po.vendor_id]);
+  if (!vendorRows[0]) return { error: "The purchase order's vendor no longer exists" };
+
+  const [poItemRows] = await conn.query<any[]>(
+    "SELECT * FROM purchase_order_items WHERE purchase_order_id = ? ORDER BY sort_order ASC, id ASC",
+    [purchaseOrderId]
+  );
+  if (!poItemRows.length) {
+    return { error: "This purchase order has no line items to convert" };
+  }
+
+  const lines: NormalizedLine[] = poItemRows.map((i: any) => ({
+    item_id: i.item_id,
+    description: i.description,
+    hsn_code: i.hsn_code,
+    qty: Number(i.qty),
+    unit: i.unit,
+    rate: Number(i.rate),
+    discount_percent: 0,
+    tax_rate: Number(i.tax_rate),
+  }));
+
+  return { po, vendorId: po.vendor_id as number, lines };
+}
+
 purchaseBillsRouter.get(
   "/",
   requireModuleAccess(MODULE, "view"),
@@ -107,10 +181,11 @@ purchaseBillsRouter.get(
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
     const [rows] = await pool.query<any[]>(
-      `SELECT b.*, v.name as vendor_name, co.name as company_name, co.code as company_code
+      `SELECT b.*, v.name as vendor_name, co.name as company_name, co.code as company_code, po.po_no as source_po_no
        FROM purchase_bills b
        JOIN vendors v ON v.id = b.vendor_id
        JOIN companies co ON co.id = b.company_id
+       LEFT JOIN purchase_orders po ON po.id = b.purchase_order_id
        WHERE 1=1 ${searchClause}
        ORDER BY b.created_at DESC
        LIMIT ? OFFSET ?`,
@@ -138,33 +213,66 @@ purchaseBillsRouter.get(
 
 // Creating a Purchase Bill and posting its journal must succeed or fail
 // together - identical reasoning to every prior phase's POST handler.
+// Two shapes of request land here: a direct bill (vendor_id + items come
+// from the request body, validated by validatePayload exactly as in
+// Phase 7A) or a PO conversion (purchase_order_id is set - vendor_id/items
+// in the body are ignored entirely; resolvePurchaseOrderSource re-reads
+// the authoritative figures from the database instead, inside this same
+// transaction, with the PO row locked). Either way, everything from here
+// down (totals, insert, journal) is identical.
 purchaseBillsRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
-    const result = await validatePayload(req.body);
-    if ("error" in result) return res.status(400).json({ message: result.error });
-    const { company, lines } = result;
+    const { company_id, purchase_order_id, bill_date, due_date, reference_no, notes } = req.body ?? {};
+    if (!company_id || !bill_date) {
+      return res.status(400).json({ message: "company_id and bill_date are required" });
+    }
 
-    const { vendor_id, purchase_order_id, bill_date, due_date, reference_no, notes } = req.body ?? {};
-
-    let subtotal = 0;
-    let taxAmount = 0;
-    const computedLines = lines.map((line) => {
-      const computed = computeLine(line);
-      subtotal += computed.taxableValue;
-      taxAmount += computed.taxAmount;
-      return { line, computed };
-    });
-    subtotal = Math.round(subtotal * 100) / 100;
-    taxAmount = Math.round(taxAmount * 100) / 100;
-    const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
-
-    const { docNumber, financialYear } = await getNextDocNumber("purchase_bill", company!.code, new Date(bill_date));
+    const [companyRows] = await pool.query<any[]>("SELECT * FROM companies WHERE id = ?", [company_id]);
+    const company = companyRows[0] as Company | undefined;
+    if (!company) return res.status(404).json({ message: "Company not found" });
 
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+
+      let vendorId: number;
+      let lines: NormalizedLine[];
+      let sourcePurchaseOrderId: number | null = null;
+
+      if (purchase_order_id) {
+        const poResult = await resolvePurchaseOrderSource(conn, Number(purchase_order_id), Number(company_id));
+        if ("error" in poResult) {
+          await conn.rollback();
+          return res.status(400).json({ message: poResult.error });
+        }
+        vendorId = poResult.vendorId;
+        lines = poResult.lines;
+        sourcePurchaseOrderId = poResult.po.id;
+      } else {
+        const result = await validatePayload(req.body);
+        if ("error" in result) {
+          await conn.rollback();
+          return res.status(400).json({ message: result.error });
+        }
+        vendorId = Number(req.body.vendor_id);
+        lines = result.lines;
+      }
+
+      let subtotal = 0;
+      let taxAmount = 0;
+      const computedLines = lines.map((line) => {
+        const computed = computeLine(line);
+        subtotal += computed.taxableValue;
+        taxAmount += computed.taxAmount;
+        return { line, computed };
+      });
+      subtotal = Math.round(subtotal * 100) / 100;
+      taxAmount = Math.round(taxAmount * 100) / 100;
+      const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+
+      const { docNumber, financialYear } = await getNextDocNumber("purchase_bill", company.code, new Date(bill_date));
 
       const [insertResult] = await conn.query<any>(
         `INSERT INTO purchase_bills
@@ -174,9 +282,9 @@ purchaseBillsRouter.post(
         [
           docNumber,
           financialYear,
-          req.body.company_id,
-          vendor_id,
-          purchase_order_id || null,
+          company_id,
+          vendorId,
+          sourcePurchaseOrderId,
           bill_date,
           due_date || null,
           reference_no || null,
@@ -214,7 +322,7 @@ purchaseBillsRouter.post(
       }
 
       const journal = await postPurchaseBillJournalTx(conn, {
-        companyId: Number(req.body.company_id),
+        companyId: Number(company_id),
         billId,
         billNo: docNumber,
         billDate: bill_date,
