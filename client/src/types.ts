@@ -517,3 +517,21 @@ export interface TrialBalanceResult {
   totalCredit: number;
   isBalanced: boolean;
 }
+
+export interface ProfitAndLossRow {
+  account_id: number;
+  account_code: string;
+  name: string;
+  category: string | null;
+  amount: number;
+}
+
+export interface ProfitAndLossResult {
+  from: string;
+  to: string;
+  income: ProfitAndLossRow[];
+  expenses: ProfitAndLossRow[];
+  totalIncome: number;
+  totalExpenses: number;
+  netProfit: number;
+}

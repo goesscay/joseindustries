@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
-import { AccountingError, getGeneralLedger, getTrialBalance } from "../services/accounting";
+import { AccountingError, getGeneralLedger, getProfitAndLoss, getTrialBalance } from "../services/accounting";
 
 // General Ledger / Trial Balance - built entirely from the double-entry
 // ledger (journals + journal_lines + chart_of_accounts), never the old
@@ -61,6 +61,25 @@ accountingReportsRouter.get(
     // rows by construction (its query's WHERE clause) - there's no
     // account_id parameter here for a mismatch to even be possible.
     const result = await getTrialBalance(companyId, asOfDate);
+    res.json(result);
+  })
+);
+
+// Profit & Loss (Phase 8) - built entirely from journals + journal_lines +
+// chart_of_accounts (see getProfitAndLoss's doc comment), never the legacy
+// documents/expenses-based query in reports.ts's own /profit-loss route.
+// Same company-scoping-by-construction as trial-balance above - the only
+// scoping input is company_id itself, used directly in the query's WHERE
+// clause, so there's no account_id parameter for a cross-company mismatch
+// to even be possible.
+accountingReportsRouter.get(
+  "/profit-loss",
+  asyncHandler(async (req, res) => {
+    const companyId = req.query.company_id ? Number(req.query.company_id) : null;
+    if (!companyId) return res.status(400).json({ message: "company_id is required" });
+    const { from, to } = dateRange(req.query);
+
+    const result = await getProfitAndLoss(companyId, from, to);
     res.json(result);
   })
 );

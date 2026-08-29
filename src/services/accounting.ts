@@ -950,3 +950,92 @@ export async function getTrialBalance(companyId: number, asOfDate: string): Prom
     isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
   };
 }
+
+export interface ProfitAndLossRow {
+  account_id: number;
+  account_code: string;
+  name: string;
+  category: string | null;
+  amount: number;
+}
+
+export interface ProfitAndLossResult {
+  from: string;
+  to: string;
+  income: ProfitAndLossRow[];
+  expenses: ProfitAndLossRow[];
+  totalIncome: number;
+  totalExpenses: number;
+  netProfit: number;
+}
+
+/**
+ * Built entirely from journals + journal_lines + chart_of_accounts (never
+ * documents/expenses/purchase_bills/receipts/vendor_payments, and never the
+ * legacy reports.ts queries) - for one company's active revenue/expense
+ * accounts, over a date range (Phase 8, Step 18). Balance-sheet accounts
+ * (asset/liability/equity - Cash, Bank, Accounts Receivable/Payable, Input
+ * GST, Output CGST/SGST/IGST, GST Payable, ...) are excluded by construction
+ * via the `account_type IN ('revenue','expense')` filter, never by naming or
+ * category matching, so no future liability/asset account can leak in.
+ *
+ * Sums every journal line in range regardless of `status` - same reasoning
+ * as getTrialBalance: a reversed original and its posted reversal must both
+ * be summed for an edited/cancelled transaction's net contribution to come
+ * out correct (zero if fully reversed, or exactly the corrected figure if
+ * reversed-then-reposted). Filtering to `status = 'posted'` only would
+ * silently drop the original half of that cancelling pair.
+ *
+ * Income = Credit - Debit (revenue accounts normally carry a credit
+ * balance); Expense = Debit - Credit (expense accounts normally carry a
+ * debit balance) - the exact formula requested, applied in JS after the
+ * single aggregate query, mirroring getTrialBalance's net-then-sign shape.
+ * Net Profit = Total Income - Total Expenses, never forced to reconcile to
+ * anything - unlike a Trial Balance, a P&L has no reason to balance to zero.
+ * An account with zero net activity in range (including one whose activity
+ * was fully offset by a reversal) is omitted, same convention as
+ * getTrialBalance.
+ */
+export async function getProfitAndLoss(companyId: number, from: string, to: string): Promise<ProfitAndLossResult> {
+  const [rows] = await pool.query<any[]>(
+    `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category,
+            COALESCE(SUM(jl.debit), 0) as total_debit, COALESCE(SUM(jl.credit), 0) as total_credit
+     FROM chart_of_accounts coa
+     LEFT JOIN journal_lines jl ON jl.account_id = coa.id
+     LEFT JOIN journals j ON j.id = jl.journal_id AND j.journal_date BETWEEN ? AND ?
+     WHERE coa.company_id = ? AND coa.is_active = 1 AND coa.account_type IN ('revenue', 'expense')
+     GROUP BY coa.id, coa.account_code, coa.name, coa.account_type, coa.category
+     HAVING (total_debit <> 0 OR total_credit <> 0)
+     ORDER BY coa.account_code ASC`,
+    [from, to, companyId]
+  );
+
+  const income: ProfitAndLossRow[] = [];
+  const expenses: ProfitAndLossRow[] = [];
+  for (const r of rows) {
+    const debit = Number(r.total_debit);
+    const credit = Number(r.total_credit);
+    const row: ProfitAndLossRow = {
+      account_id: r.account_id,
+      account_code: r.account_code,
+      name: r.name,
+      category: r.category,
+      amount: r.account_type === "revenue" ? round2(credit - debit) : round2(debit - credit),
+    };
+    if (r.account_type === "revenue") income.push(row);
+    else expenses.push(row);
+  }
+
+  const totalIncome = round2(income.reduce((s, r) => s + r.amount, 0));
+  const totalExpenses = round2(expenses.reduce((s, r) => s + r.amount, 0));
+
+  return {
+    from,
+    to,
+    income,
+    expenses,
+    totalIncome,
+    totalExpenses,
+    netProfit: round2(totalIncome - totalExpenses),
+  };
+}

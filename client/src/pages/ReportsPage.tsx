@@ -10,6 +10,8 @@ import {
   GeneralLedgerEntry,
   GeneralLedgerResult,
   LedgerAccountType,
+  ProfitAndLossResult,
+  ProfitAndLossRow,
   TrialBalanceResult,
   TrialBalanceRow,
   Vendor,
@@ -236,21 +238,37 @@ function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors
   );
 }
 
+// Built entirely from the double-entry ledger (journals + journal_lines +
+// chart_of_accounts) via /api/accounting/profit-loss - not from the old
+// documents/expenses-based query the legacy /api/reports/profit-loss route
+// used. Income = Credit - Debit on revenue accounts, Expense = Debit -
+// Credit on expense accounts (Phase 8) - GST/Accounts Receivable/Accounts
+// Payable/Bank/Cash never appear, since they're asset/liability accounts
+// excluded by the backend query itself, not by anything filtered here.
 function ProfitLossTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<{ revenue: number; expensesByCategory: { category: string; amount: number }[]; totalExpenses: number; netProfit: number } | null>(null);
+  const [data, setData] = useState<ProfitAndLossResult | null>(null);
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
 
   async function load() {
+    if (!companyId) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ from: range[0].format("YYYY-MM-DD"), to: range[1].format("YYYY-MM-DD") });
-      if (companyId) params.set("company_id", String(companyId));
-      const res = await api.get<typeof data>(`/reports/profit-loss?${params.toString()}`);
+      const params = new URLSearchParams({
+        company_id: String(companyId),
+        from: range[0].format("YYYY-MM-DD"),
+        to: range[1].format("YYYY-MM-DD"),
+      });
+      const res = await api.get<ProfitAndLossResult>(`/accounting/profit-loss?${params.toString()}`);
       setData(res);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "Failed to load profit & loss");
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -261,17 +279,32 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, range]);
 
-  const columns: ColumnsType<{ category: string; amount: number }> = [
-    { title: "Category", dataIndex: "category", key: "category" },
+  const columns: ColumnsType<ProfitAndLossRow> = [
+    { title: "Account Code", dataIndex: "account_code", key: "account_code", width: 110 },
+    { title: "Account Name", dataIndex: "name", key: "name" },
     { title: "Amount", dataIndex: "amount", key: "amount", align: "right", render: (v: number) => `Rs. ${formatMoney(v)}` },
   ];
+
+  function summaryRow(total: number) {
+    return () => (
+      <Table.Summary fixed>
+        <Table.Summary.Row>
+          <Table.Summary.Cell index={0} colSpan={2}>
+            <b>Total</b>
+          </Table.Summary.Cell>
+          <Table.Summary.Cell index={1} align="right">
+            <b>Rs. {formatMoney(total)}</b>
+          </Table.Summary.Cell>
+        </Table.Summary.Row>
+      </Table.Summary>
+    );
+  }
 
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
-          placeholder="All Companies"
-          allowClear
+          placeholder="Company"
           style={{ width: 200 }}
           value={companyId}
           options={companies.map((c) => ({ value: c.id, label: c.name }))}
@@ -285,12 +318,12 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
           <Row gutter={16} style={{ marginBottom: 16 }}>
             <Col xs={8}>
               <Card size="small">
-                <Statistic title="Revenue (excl. GST)" value={data.revenue} precision={2} prefix="Rs." valueStyle={{ color: "#3f8600" }} />
+                <Statistic title="Total Income" value={data.totalIncome} precision={2} prefix="Rs." valueStyle={{ color: "#3f8600" }} />
               </Card>
             </Col>
             <Col xs={8}>
               <Card size="small">
-                <Statistic title="Total Expenses (excl. GST)" value={data.totalExpenses} precision={2} prefix="Rs." valueStyle={{ color: "#cf1322" }} />
+                <Statistic title="Total Expenses" value={data.totalExpenses} precision={2} prefix="Rs." valueStyle={{ color: "#cf1322" }} />
               </Card>
             </Col>
             <Col xs={8}>
@@ -305,14 +338,29 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
               </Card>
             </Col>
           </Row>
-          <Typography.Title level={5}>Expenses by Category</Typography.Title>
+
+          <Typography.Title level={5}>Income</Typography.Title>
           <Table
-            rowKey="category"
+            rowKey="account_id"
             columns={columns}
-            dataSource={data.expensesByCategory}
+            dataSource={data.income}
             loading={loading}
             size="small"
             pagination={false}
+            summary={summaryRow(data.totalIncome)}
+          />
+
+          <Typography.Title level={5} style={{ marginTop: 24 }}>
+            Expenses
+          </Typography.Title>
+          <Table
+            rowKey="account_id"
+            columns={columns}
+            dataSource={data.expenses}
+            loading={loading}
+            size="small"
+            pagination={false}
+            summary={summaryRow(data.totalExpenses)}
           />
         </>
       )}
