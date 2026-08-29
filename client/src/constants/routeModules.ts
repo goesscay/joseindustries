@@ -29,6 +29,7 @@ export const ROUTE_MODULE: Record<string, string> = {
   "/vendors": "contacts.vendors",
   "/items": "items.items",
   "/reports": "reports.reports",
+  "/reports/gst-returns": "reports.reports",
   "/companies": "settings.company_profile",
   "/settings/bank-accounts": "banking.accounts",
   "/settings/tax-rates": "settings.tax_gst",

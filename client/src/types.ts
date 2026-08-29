@@ -591,3 +591,72 @@ export interface GstSummaryResult {
   netGst: number;
   gstPayableAccountBalance: number;
 }
+
+export interface Gstr1InvoiceRow {
+  documentId: number;
+  docNumber: string;
+  issueDate: string;
+  status: string;
+  customerName: string;
+  customerGstin: string | null;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxTotal: number;
+  grandTotal: number;
+}
+
+export interface Gstr1HsnRow {
+  hsnCode: string;
+  taxRate: number;
+  qty: number;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxTotal: number;
+}
+
+export interface Gstr1Result {
+  from: string;
+  to: string;
+  b2b: {
+    invoices: Gstr1InvoiceRow[];
+    totalTaxableValue: number;
+    totalCgst: number;
+    totalSgst: number;
+    totalIgst: number;
+  };
+  b2c: {
+    invoiceCount: number;
+    totalTaxableValue: number;
+    totalCgst: number;
+    totalSgst: number;
+    totalIgst: number;
+  };
+  hsnSummary: Gstr1HsnRow[];
+  cancelledInvoices: Gstr1InvoiceRow[];
+  draftCount: number;
+  unsupported: string[];
+}
+
+export interface Gstr3bSection {
+  label: string;
+  taxableValue: number | null;
+  igst: number | null;
+  cgst: number | null;
+  sgst: number | null;
+  notTracked: boolean;
+  note?: string;
+}
+
+export interface Gstr3bResult {
+  from: string;
+  to: string;
+  outwardSupplies: Gstr3bSection[];
+  itc: Gstr3bSection[];
+  netGstPayable: number;
+  netGstRefundable: number;
+  unsupported: string[];
+}

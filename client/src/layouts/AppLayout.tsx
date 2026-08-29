@@ -168,15 +168,17 @@ export function AppLayout() {
                 { key: "/reports/expenses", icon: <AccountBookOutlined />, label: comingSoonLabel("Expense Reports"), disabled: true },
                 { key: "/reports/receivables", icon: <WalletOutlined />, label: comingSoonLabel("Receivables"), disabled: true },
                 { key: "/reports/payables", icon: <MoneyCollectOutlined />, label: comingSoonLabel("Payables"), disabled: true },
-                { key: "/reports/tax-gst", icon: <PercentageOutlined />, label: comingSoonLabel("Tax & GST"), disabled: true },
                 { key: "/reports/banking", icon: <CreditCardOutlined />, label: comingSoonLabel("Banking"), disabled: true },
                 { key: "/reports/inventory", icon: <DatabaseOutlined />, label: comingSoonLabel("Inventory"), disabled: true },
-                // Financial Reports is the one enabled item in this group -
-                // it's a real destination (the existing /reports page,
-                // which now also has General Ledger + Trial Balance tabs),
-                // not a placeholder. The other 8 siblings above stay
-                // disabled - they're unimplemented, per Phase 5's scope.
+                // Financial Reports and GST Returns are the two enabled
+                // items in this group - both real destinations (the
+                // existing /reports page with GL/Trial Balance/Balance
+                // Sheet/Cash Flow/GST Summary tabs, and the Phase 11B GST
+                // Returns preparation page). The remaining placeholders
+                // above stay disabled - unimplemented, per their own
+                // phase's scope.
                 { key: "/reports", icon: <BarChartOutlined />, label: "Financial Reports" },
+                { key: "/reports/gst-returns", icon: <PercentageOutlined />, label: "GST Returns" },
               ],
             },
             {

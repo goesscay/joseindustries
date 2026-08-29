@@ -23,6 +23,7 @@ import { PurchaseBillsPage } from "./pages/PurchaseBillsPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { GstReturnsPage } from "./pages/GstReturnsPage";
 import { TaxRatesPage } from "./pages/TaxRatesPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { DocumentNumberingPage } from "./pages/DocumentNumberingPage";
@@ -102,6 +103,7 @@ function App() {
             }
           />
           <Route path="/reports" element={<ModuleGate module="reports.reports"><ReportsPage /></ModuleGate>} />
+          <Route path="/reports/gst-returns" element={<ModuleGate module="reports.reports"><GstReturnsPage /></ModuleGate>} />
           <Route path="/settings/tax-rates" element={<ModuleGate module="settings.tax_gst"><TaxRatesPage /></ModuleGate>} />
           <Route
             path="/settings/payment-terms"

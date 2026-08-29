@@ -26,6 +26,7 @@ import { journalEntriesRouter, accountTransfersRouter } from "./routes/journalEn
 import { chartOfAccountsRouter } from "./routes/chartOfAccounts";
 import { journalsRouter } from "./routes/journals";
 import { accountingReportsRouter } from "./routes/accountingReports";
+import { gstReturnsRouter } from "./routes/gstReturns";
 import { reportsRouter } from "./routes/reports";
 import { taxRatesRouter } from "./routes/taxRates";
 import { paymentTermsRouter } from "./routes/paymentTerms";
@@ -67,6 +68,7 @@ app.use("/api/account-transfers", accountTransfersRouter);
 app.use("/api/chart-of-accounts", chartOfAccountsRouter);
 app.use("/api/journals", journalsRouter);
 app.use("/api/accounting", accountingReportsRouter);
+app.use("/api/accounting/gst-returns", gstReturnsRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/tax-rates", taxRatesRouter);
 app.use("/api/payment-terms", paymentTermsRouter);
