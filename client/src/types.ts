@@ -265,6 +265,7 @@ export interface Vendor {
 export interface ExpenseCategory {
   id: number;
   name: string;
+  default_account_category: string | null;
   created_at: string;
 }
 

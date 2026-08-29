@@ -544,6 +544,99 @@ export async function postTaxInvoiceJournalTx(conn: PoolConnection, input: PostT
 // mathematically honest by still folding a hidden (reversed) row's amount
 // into the running balance shown on the rows around it.
 
+/** Safe universal fallback expense account when a category has no mapping
+ * of its own (or the expense has no category at all) - a real, sensible
+ * bucket ("unclassified expense"), never a random/guessed account. */
+const DEFAULT_EXPENSE_ACCOUNT_CATEGORY = "Other Expenses";
+
+/**
+ * Resolves which company account an expense's amount should debit, via
+ * expense_categories.default_account_category (Phase 6) - a
+ * company-agnostic chart_of_accounts.category string, resolved per-company
+ * through getSystemAccountByCategory exactly like every other account
+ * lookup in this file. Falls back to 'Other Expenses' when the category
+ * has no mapping, or the expense has no category at all.
+ */
+export async function resolveExpenseAccountId(companyId: number, categoryId: number | null): Promise<number | undefined> {
+  let accountCategory = DEFAULT_EXPENSE_ACCOUNT_CATEGORY;
+  if (categoryId) {
+    const [rows] = await pool.query<any[]>(
+      "SELECT default_account_category FROM expense_categories WHERE id = ?",
+      [categoryId]
+    );
+    if (rows[0]?.default_account_category) {
+      accountCategory = rows[0].default_account_category;
+    }
+  }
+  return getSystemAccountByCategory(companyId, accountCategory);
+}
+
+export interface PostExpenseJournalInput {
+  companyId: number;
+  expenseId: number;
+  expenseNo: string;
+  expenseDate: string;
+  /** Pre-tax expense amount. */
+  amount: number;
+  /** Combined tax_amount as already stored on the expense - never
+   * recomputed here (the schema has no CGST/SGST/IGST split to preserve,
+   * see Input GST's own doc comment). */
+  taxAmount: number;
+  categoryId: number | null;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Expense Account (+ Dr Input GST if the expense has tax), Cr Accounts
+ * Payable - for the expense's full total_amount. This is NOT "Cr Bank"
+ * directly: expenses (audited in Phase 6) have no payment-account field at
+ * all - payment is always a separate vendor_payments row, which already
+ * posts Dr Accounts Payable / Cr Bank/Cash (Phase 3) whenever one is
+ * recorded against this expense, same-day or later. The two postings
+ * share the same Accounts Payable account and net correctly regardless of
+ * timing - a same-day full payment nets to exactly Dr Expense / Cr Bank,
+ * and a genuinely unpaid expense correctly stands as a real Accounts
+ * Payable balance. Must run on a `conn` already inside the caller's
+ * transaction (see createJournalTx).
+ */
+export async function postExpenseJournalTx(conn: PoolConnection, input: PostExpenseJournalInput): Promise<Journal> {
+  const expenseAccountId = await resolveExpenseAccountId(input.companyId, input.categoryId);
+  if (!expenseAccountId) {
+    throw new AccountingError(
+      `No '${DEFAULT_EXPENSE_ACCOUNT_CATEGORY}' (or category-specific) expense account found for this company`
+    );
+  }
+  const apAccountId = await getSystemAccountByCategory(input.companyId, "Accounts Payable");
+  if (!apAccountId) {
+    throw new AccountingError("Accounts Payable system account not found for this company");
+  }
+
+  const description = `Expense ${input.expenseNo}`;
+  const lines: JournalLineInput[] = [{ account_id: expenseAccountId, debit: input.amount, credit: 0, description }];
+
+  if (input.taxAmount > 0) {
+    const inputGstAccountId = await getSystemAccountByCategory(input.companyId, "Input GST");
+    if (!inputGstAccountId) {
+      throw new AccountingError("Input GST system account not found for this company");
+    }
+    lines.push({ account_id: inputGstAccountId, debit: input.taxAmount, credit: 0, description });
+  }
+
+  const total = round2(input.amount + input.taxAmount);
+  lines.push({ account_id: apAccountId, debit: 0, credit: total, description });
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.expenseDate,
+    reference: input.expenseNo,
+    source_type: "expense",
+    source_id: input.expenseId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
 /**
  * Net balance of one account, optionally as of a given date (inclusive),
  * signed by its normal_balance so an Asset/Expense account reads positive

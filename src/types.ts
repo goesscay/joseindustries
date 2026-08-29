@@ -237,6 +237,9 @@ export interface Vendor {
 export interface ExpenseCategory {
   id: number;
   name: string;
+  /** The chart_of_accounts.category this expense category posts to, per
+   * company (Phase 6) - null falls back to 'Other Expenses'. */
+  default_account_category: string | null;
   created_at: string;
 }
 

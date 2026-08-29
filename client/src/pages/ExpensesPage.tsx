@@ -89,11 +89,11 @@ export function ExpensesPage() {
     try {
       const payload = { ...values, expense_date: values.expense_date.format("YYYY-MM-DD") };
       if (editing) {
-        await api.put(`/expenses/${editing.id}`, payload);
-        message.success("Expense updated");
+        const { journal } = await api.put<{ journal: { id: number } | null }>(`/expenses/${editing.id}`, payload);
+        message.success(journal ? `Expense updated (Journal #${journal.id} posted)` : "Expense updated");
       } else {
-        await api.post("/expenses", payload);
-        message.success("Expense created");
+        const { journal } = await api.post<{ journal: { id: number } | null }>("/expenses", payload);
+        message.success(journal ? `Expense created (Journal #${journal.id} posted)` : "Expense created");
       }
       setModalOpen(false);
       load();

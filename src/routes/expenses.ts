@@ -4,7 +4,8 @@ import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
-import { Company, Expense, Vendor } from "../types";
+import { AccountingError, getJournalBySource, postExpenseJournalTx, reverseJournalTx } from "../services/accounting";
+import { Company, Expense, Journal, Vendor } from "../types";
 
 export const expensesRouter = Router();
 const MODULE = "expenses.expenses";
@@ -93,6 +94,11 @@ async function validatePayload(body: any) {
   return { company, taxAmount };
 }
 
+// Creating an expense and posting its accounting journal must succeed or
+// fail together - see the identical reasoning on receipts.ts's POST
+// handler. Expenses have no payment-account field (see accounting.ts's
+// postExpenseJournalTx doc comment) - the journal here is always Dr
+// Expense (+Input GST) / Cr Accounts Payable, never Cr Bank directly.
 expensesRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
@@ -106,41 +112,68 @@ expensesRouter.post(
 
     const { docNumber, financialYear } = await getNextDocNumber("expense", company!.code, new Date(expense_date));
 
-    const [insertResult] = await pool.query<any>(
-      `INSERT INTO expenses
-         (expense_no, financial_year, company_id, vendor_id, category_id, expense_date, description,
-          amount, tax_amount, total_amount, reference_no, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        docNumber,
-        financialYear,
-        req.body.company_id,
-        vendor_id || null,
-        category_id || null,
-        expense_date,
-        description || null,
-        amount,
-        taxAmount,
-        totalAmount,
-        reference_no || null,
-        notes || null,
-        req.user!.sub,
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const created = await findById(insertResult.insertId);
-    res.status(201).json({ expense: created });
+      const [insertResult] = await conn.query<any>(
+        `INSERT INTO expenses
+           (expense_no, financial_year, company_id, vendor_id, category_id, expense_date, description,
+            amount, tax_amount, total_amount, reference_no, notes, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          docNumber,
+          financialYear,
+          req.body.company_id,
+          vendor_id || null,
+          category_id || null,
+          expense_date,
+          description || null,
+          amount,
+          taxAmount,
+          totalAmount,
+          reference_no || null,
+          notes || null,
+          req.user!.sub,
+        ]
+      );
+      const expenseId = insertResult.insertId;
+
+      const journal = await postExpenseJournalTx(conn, {
+        companyId: Number(req.body.company_id),
+        expenseId,
+        expenseNo: docNumber,
+        expenseDate: expense_date,
+        amount: Number(amount),
+        taxAmount,
+        categoryId: category_id || null,
+        createdBy: req.user!.sub,
+      });
+
+      await conn.commit();
+      const created = await findById(expenseId);
+      res.status(201).json({ expense: created, journal: { id: journal.id, status: journal.status } });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Expense could not be recorded: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 
+// A posted journal is never edited in place - reverse whatever journal
+// currently exists for this expense and post a fresh one reflecting the
+// corrected figures, in the same transaction as the expense update. See
+// receipts.ts's PUT handler for the identical reasoning.
 expensesRouter.put(
   "/:id",
   requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const existing = await findById(id);
-    if (!existing) return res.status(404).json({ message: "Expense not found" });
-
     const result = await validatePayload(req.body);
     if ("error" in result) return res.status(400).json({ message: result.error });
     const { taxAmount } = result;
@@ -148,47 +181,109 @@ expensesRouter.put(
     const { vendor_id, category_id, expense_date, description, amount, reference_no, notes } = req.body;
     const totalAmount = Number(amount) + taxAmount;
 
-    await pool.query(
-      `UPDATE expenses SET
-         company_id = ?, vendor_id = ?, category_id = ?, expense_date = ?, description = ?,
-         amount = ?, tax_amount = ?, total_amount = ?, reference_no = ?, notes = ?
-       WHERE id = ?`,
-      [
-        req.body.company_id,
-        vendor_id || null,
-        category_id || null,
-        expense_date,
-        description || null,
-        amount,
-        taxAmount,
-        totalAmount,
-        reference_no || null,
-        notes || null,
-        id,
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const updated = await findById(id);
-    res.json({ expense: updated });
+      const [existingRows] = await conn.query<any[]>("SELECT * FROM expenses WHERE id = ? FOR UPDATE", [id]);
+      const existing = existingRows[0] as Expense | undefined;
+      if (!existing) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Expense not found" });
+      }
+
+      await conn.query(
+        `UPDATE expenses SET
+           company_id = ?, vendor_id = ?, category_id = ?, expense_date = ?, description = ?,
+           amount = ?, tax_amount = ?, total_amount = ?, reference_no = ?, notes = ?
+         WHERE id = ?`,
+        [
+          req.body.company_id,
+          vendor_id || null,
+          category_id || null,
+          expense_date,
+          description || null,
+          amount,
+          taxAmount,
+          totalAmount,
+          reference_no || null,
+          notes || null,
+          id,
+        ]
+      );
+
+      const priorJournal = await getJournalBySource("expense", id);
+      if (priorJournal) {
+        await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+      }
+
+      const journal = await postExpenseJournalTx(conn, {
+        companyId: Number(req.body.company_id),
+        expenseId: id,
+        expenseNo: existing.expense_no,
+        expenseDate: expense_date,
+        amount: Number(amount),
+        taxAmount,
+        categoryId: category_id || null,
+        createdBy: req.user!.sub,
+      });
+
+      await conn.commit();
+      const updated = await findById(id);
+      res.json({ expense: updated, journal: { id: journal.id, status: journal.status } });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Expense could not be updated: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 
+// The existing business rule already blocks deleting an expense that has
+// vendor_payments recorded against it (an FK violation, caught below and
+// turned into a friendly message) - preserved exactly as-is. What's new:
+// the expense's own journal is reversed first, in the same transaction,
+// so a successful delete never leaves an orphan journal - and if the
+// delete itself is blocked (payments exist), the whole transaction rolls
+// back, including the reversal, so nothing changes at all.
 expensesRouter.delete(
   "/:id",
   requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const existing = await findById(id);
-    if (!existing) return res.status(404).json({ message: "Expense not found" });
-
+    const conn = await pool.getConnection();
     try {
-      await pool.query("DELETE FROM expenses WHERE id = ?", [id]);
+      await conn.beginTransaction();
+
+      const [existingRows] = await conn.query<any[]>("SELECT id FROM expenses WHERE id = ? FOR UPDATE", [id]);
+      if (!existingRows[0]) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Expense not found" });
+      }
+
+      const priorJournal = await getJournalBySource("expense", id);
+      if (priorJournal) {
+        await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+      }
+
+      await conn.query("DELETE FROM expenses WHERE id = ?", [id]);
+      await conn.commit();
       res.json({ message: "Expense deleted" });
     } catch (err: any) {
+      await conn.rollback();
       if (err?.code === "ER_ROW_IS_REFERENCED_2" || err?.code === "ER_ROW_IS_REFERENCED") {
         return res.status(400).json({ message: "This expense has payments recorded against it and can't be deleted" });
       }
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Expense could not be deleted: ${err.message}` });
+      }
       throw err;
+    } finally {
+      conn.release();
     }
   })
 );

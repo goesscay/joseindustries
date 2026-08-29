@@ -759,6 +759,45 @@ JOIN chart_of_accounts parent
 SET child.parent_id = parent.id
 WHERE child.account_code IN ('2121', '2122', '2123');
 
+-- Phase 6: Input GST on expenses. Unlike Tax Invoices, the `expenses` table
+-- stores one combined tax_amount (no CGST/SGST/IGST split, and vendor_id is
+-- optional so there's no reliable inter-/intra-state signal to derive one
+-- without inventing data) - so this is a single combined account, the same
+-- reasoning Phase 4 used to leave the pre-existing single '2120' GST
+-- Payable account alone rather than force a 3-way split onto data that
+-- doesn't support it. A new sibling under Current Assets (1100), same
+-- pattern as every other chart_of_accounts seed row.
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1151', 'Input GST', 'asset', 'Input GST', 'debit', TRUE FROM companies;
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '1100'
+SET child.parent_id = parent.id
+WHERE child.account_code = '1151';
+
+-- Phase 6: Expense Category -> Chart of Accounts mapping. expense_categories
+-- is a single GLOBAL lookup (no company_id), while chart_of_accounts is
+-- per-company, so this can't be a direct FK to one chart_of_accounts row -
+-- it stores the company-agnostic `chart_of_accounts.category` string each
+-- category should resolve to (per company, via the same
+-- getSystemAccountByCategory() every other Phase 3/4/5 account lookup
+-- already uses). NULL is a valid, safe state - the posting service falls
+-- back to 'Other Expenses' for a category with no mapping (or no category
+-- at all), never a random account. The `default_account_category IS NULL`
+-- guard makes every UPDATE below idempotent AND never overwrites a
+-- mapping an admin deliberately changed later.
+ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS default_account_category VARCHAR(100) NULL;
+
+UPDATE expense_categories SET default_account_category = 'Cost of Goods Sold' WHERE name = 'Raw Material' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Salaries' WHERE name = 'Salaries & Wages' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Rent' WHERE name = 'Rent' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Utilities' WHERE name = 'Electricity' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Travel' WHERE name = 'Transport & Freight' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Office Expenses' WHERE name = 'Office Supplies' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Other Expenses' WHERE name = 'Repairs & Maintenance' AND default_account_category IS NULL;
+UPDATE expense_categories SET default_account_category = 'Other Expenses' WHERE name = 'Miscellaneous' AND default_account_category IS NULL;
+
 -- Phase 5: General Ledger / Trial Balance filter and join heavily on
 -- (company_id, journal_date, status) and (source_type, source_id) - neither
 -- had a dedicated index before (journal_lines.account_id already has one
