@@ -23,6 +23,7 @@ import {
   CreditCardOutlined,
   BarChartOutlined,
   ShoppingCartOutlined,
+  ShoppingOutlined,
   DollarOutlined,
   SettingOutlined,
   PercentageOutlined,
@@ -32,6 +33,20 @@ import {
   UserAddOutlined,
   ProfileOutlined,
   RollbackOutlined,
+  FileAddOutlined,
+  FileOutlined,
+  FileSyncOutlined,
+  ColumnWidthOutlined,
+  TagOutlined,
+  CalendarOutlined,
+  LayoutOutlined,
+  BellOutlined,
+  HistoryOutlined,
+  SwapOutlined,
+  SwapLeftOutlined,
+  LineChartOutlined,
+  PieChartOutlined,
+  DatabaseOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { ROUTE_MODULE } from "../constants/routeModules";
@@ -42,19 +57,18 @@ const { useBreakpoint } = Grid;
 
 type NavItem = Required<MenuProps>["items"][number];
 
-// Menu item keys must be unique across the whole tree, but a couple of
-// items are deliberately shortcuts to a page that already lives elsewhere
-// in the nav ("Bank Accounts" under Settings -> Banking's "Bank & Cash";
-// "Customers" under Sales -> Contacts' "Customers") - each gets its own key
-// here, resolved to the real route on click instead of reusing a key twice.
+// Menu item keys must be unique across the whole tree, but "Bank Accounts"
+// under Settings is deliberately a shortcut to the same page as "Bank &
+// Cash" under Banking - give it its own key and resolve it to the real
+// route on click instead of reusing "/accounts" twice.
 const KEY_ALIASES: Record<string, string> = {
   "/settings/bank-accounts": "/accounts",
-  "/sales/customers": "/customers",
 };
 
-// Not implemented yet - shown in the Sales menu per the current nav spec so
-// the module list is visible up front, but disabled (no route, nothing to
-// click through to) rather than faked.
+// Not implemented yet - shown in the menu per the current nav spec (so the
+// full module list is visible up front) but disabled: no route, nothing to
+// click through to, rather than a faked page. Grouped here by which section
+// they live in purely for readability of the nav tree below.
 function comingSoonLabel(text: string) {
   return (
     <span>
@@ -82,7 +96,7 @@ export function AppLayout() {
               label: "Sales",
               children: [
                 { key: "/leads", icon: <UserAddOutlined />, label: "Leads" },
-                { key: "/sales/customers", icon: <ContactsOutlined />, label: "Customers" },
+                { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
                 { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
                 { key: "/proforma-invoices", icon: <FileDoneOutlined />, label: "Proforma Invoices" },
                 { key: "/sales/orders", icon: <ProfileOutlined />, label: comingSoonLabel("Sales Orders"), disabled: true },
@@ -93,12 +107,23 @@ export function AppLayout() {
               ],
             },
             {
+              key: "group-purchases",
+              icon: <ShoppingOutlined />,
+              label: "Purchases",
+              children: [
+                { key: "/vendors", icon: <ShopOutlined />, label: "Vendors" },
+                { key: "/purchases/orders", icon: <FileAddOutlined />, label: comingSoonLabel("Purchase Orders"), disabled: true },
+                { key: "/purchases/bills", icon: <FileOutlined />, label: comingSoonLabel("Purchase Bills"), disabled: true },
+                { key: "/purchases/debit-notes", icon: <SwapLeftOutlined />, label: comingSoonLabel("Debit Notes"), disabled: true },
+                { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
+              ],
+            },
+            {
               key: "group-expenses",
               icon: <DollarOutlined />,
               label: "Expenses",
               children: [
                 { key: "/expenses", icon: <AccountBookOutlined />, label: "Expenses" },
-                { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
                 { key: "/expense-categories", icon: <FolderOutlined />, label: "Expense Categories" },
               ],
             },
@@ -106,28 +131,39 @@ export function AppLayout() {
               key: "group-banking",
               icon: <CreditCardOutlined />,
               label: "Banking",
-              children: [{ key: "/accounts", icon: <CreditCardOutlined />, label: "Bank & Cash" }],
-            },
-            {
-              key: "group-contacts",
-              icon: <ContactsOutlined />,
-              label: "Contacts",
               children: [
-                { key: "/customers", icon: <ContactsOutlined />, label: "Customers" },
-                { key: "/vendors", icon: <ShopOutlined />, label: "Vendors" },
+                { key: "/accounts", icon: <CreditCardOutlined />, label: "Bank & Cash" },
+                { key: "/banking/transactions", icon: <HistoryOutlined />, label: comingSoonLabel("Transactions"), disabled: true },
+                { key: "/banking/transfers", icon: <SwapOutlined />, label: comingSoonLabel("Transfers"), disabled: true },
+                { key: "/banking/reconciliation", icon: <FileSyncOutlined />, label: comingSoonLabel("Reconciliation"), disabled: true },
               ],
             },
             {
               key: "group-items",
               icon: <TagsOutlined />,
               label: "Items",
-              children: [{ key: "/items", icon: <TagsOutlined />, label: "Items" }],
+              children: [
+                { key: "/items", icon: <TagsOutlined />, label: "Items & Services" },
+                { key: "/items/categories", icon: <FolderOutlined />, label: comingSoonLabel("Categories"), disabled: true },
+                { key: "/items/units", icon: <ColumnWidthOutlined />, label: comingSoonLabel("Units"), disabled: true },
+                { key: "/items/price-lists", icon: <TagOutlined />, label: comingSoonLabel("Price Lists"), disabled: true },
+              ],
             },
             {
               key: "group-reports",
               icon: <BarChartOutlined />,
               label: "Reports",
-              children: [{ key: "/reports", icon: <BarChartOutlined />, label: "Reports" }],
+              children: [
+                { key: "/reports/sales", icon: <LineChartOutlined />, label: comingSoonLabel("Sales Reports"), disabled: true },
+                { key: "/reports/purchases", icon: <PieChartOutlined />, label: comingSoonLabel("Purchase Reports"), disabled: true },
+                { key: "/reports/expenses", icon: <AccountBookOutlined />, label: comingSoonLabel("Expense Reports"), disabled: true },
+                { key: "/reports/receivables", icon: <WalletOutlined />, label: comingSoonLabel("Receivables"), disabled: true },
+                { key: "/reports/payables", icon: <MoneyCollectOutlined />, label: comingSoonLabel("Payables"), disabled: true },
+                { key: "/reports/tax-gst", icon: <PercentageOutlined />, label: comingSoonLabel("Tax & GST"), disabled: true },
+                { key: "/reports/banking", icon: <CreditCardOutlined />, label: comingSoonLabel("Banking"), disabled: true },
+                { key: "/reports/inventory", icon: <DatabaseOutlined />, label: comingSoonLabel("Inventory"), disabled: true },
+                { key: "/reports/financial", icon: <BarChartOutlined />, label: comingSoonLabel("Financial Reports"), disabled: true },
+              ],
             },
             {
               key: "group-settings",
@@ -140,9 +176,12 @@ export function AppLayout() {
                   : []),
                 { key: "/settings/bank-accounts", icon: <CreditCardOutlined />, label: "Bank Accounts" },
                 { key: "/settings/tax-rates", icon: <PercentageOutlined />, label: "Tax & GST" },
+                { key: "/settings/financial-year", icon: <CalendarOutlined />, label: comingSoonLabel("Financial Year"), disabled: true },
                 { key: "/settings/document-numbering", icon: <NumberOutlined />, label: "Document Numbering" },
                 { key: "/settings/payment-terms", icon: <FileProtectOutlined />, label: "Payment Terms" },
+                { key: "/settings/invoice-templates", icon: <LayoutOutlined />, label: comingSoonLabel("Invoice Templates"), disabled: true },
                 { key: "/settings/terms-conditions", icon: <SafetyOutlined />, label: "Terms & Conditions" },
+                { key: "/settings/notifications", icon: <BellOutlined />, label: comingSoonLabel("Notifications"), disabled: true },
               ],
             },
           ]
