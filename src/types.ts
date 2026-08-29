@@ -282,6 +282,48 @@ export interface VendorPayment {
   updated_at: string;
 }
 
+// ---- Phase 7A: Purchase Bills - its own document pair, not the Sales
+// module's documents/document_items (see schema.sql's comment on
+// purchase_bills for why). ----
+
+export type PurchaseBillStatus = "draft" | "received" | "cancelled";
+
+export interface PurchaseBill {
+  id: number;
+  bill_no: string;
+  financial_year: string;
+  company_id: number;
+  vendor_id: number;
+  purchase_order_id: number | null;
+  status: PurchaseBillStatus;
+  bill_date: string;
+  due_date: string | null;
+  reference_no: string | null;
+  notes: string | null;
+  subtotal: string;
+  tax_amount: string;
+  total_amount: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PurchaseBillItem {
+  id?: number;
+  purchase_bill_id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  taxable_amount: number;
+  tax_amount: number;
+  line_total: number;
+  sort_order?: number;
+}
+
 export type AccountType = "cash" | "bank";
 
 export interface Account {

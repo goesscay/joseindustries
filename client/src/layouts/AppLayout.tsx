@@ -114,7 +114,7 @@ export function AppLayout() {
               children: [
                 { key: "/vendors", icon: <ShopOutlined />, label: "Vendors" },
                 { key: "/purchases/orders", icon: <FileAddOutlined />, label: comingSoonLabel("Purchase Orders"), disabled: true },
-                { key: "/purchases/bills", icon: <FileOutlined />, label: comingSoonLabel("Purchase Bills"), disabled: true },
+                { key: "/purchases/bills", icon: <FileOutlined />, label: "Purchase Bills" },
                 { key: "/purchases/debit-notes", icon: <SwapLeftOutlined />, label: comingSoonLabel("Debit Notes"), disabled: true },
                 { key: "/vendor-payments", icon: <MoneyCollectOutlined />, label: "Vendor Payments" },
               ],

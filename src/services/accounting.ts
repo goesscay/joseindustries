@@ -637,6 +637,66 @@ export async function postExpenseJournalTx(conn: PoolConnection, input: PostExpe
   });
 }
 
+export interface PostPurchaseBillJournalInput {
+  companyId: number;
+  billId: number;
+  billNo: string;
+  billDate: string;
+  /** Pre-tax purchase amount (subtotal). */
+  subtotal: number;
+  /** Combined tax_amount as already stored on the bill - never recomputed
+   * here, same reasoning as Phase 6 expenses (no CGST/SGST/IGST split on
+   * the purchase side of this schema). */
+  taxAmount: number;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Purchases (a Purchases/Expense-type account, not Inventory - items
+ * aren't inventory-tracked in this schema; inventory accounting is
+ * explicitly deferred), Dr Input GST if the bill has tax, Cr Accounts
+ * Payable - the SAME company-specific AP account Expenses (Phase 6) and
+ * Vendor Payments (Phase 3) already use, so a Purchase Bill followed by a
+ * Vendor Payment nets correctly through that one shared account, exactly
+ * like Expenses do. Must run on a `conn` already inside the caller's
+ * transaction (see createJournalTx).
+ */
+export async function postPurchaseBillJournalTx(conn: PoolConnection, input: PostPurchaseBillJournalInput): Promise<Journal> {
+  const purchasesAccountId = await getSystemAccountByCategory(input.companyId, "Purchases");
+  if (!purchasesAccountId) {
+    throw new AccountingError("Purchases system account not found for this company");
+  }
+  const apAccountId = await getSystemAccountByCategory(input.companyId, "Accounts Payable");
+  if (!apAccountId) {
+    throw new AccountingError("Accounts Payable system account not found for this company");
+  }
+
+  const description = `Purchase Bill ${input.billNo}`;
+  const lines: JournalLineInput[] = [{ account_id: purchasesAccountId, debit: input.subtotal, credit: 0, description }];
+
+  if (input.taxAmount > 0) {
+    const inputGstAccountId = await getSystemAccountByCategory(input.companyId, "Input GST");
+    if (!inputGstAccountId) {
+      throw new AccountingError("Input GST system account not found for this company");
+    }
+    lines.push({ account_id: inputGstAccountId, debit: input.taxAmount, credit: 0, description });
+  }
+
+  const total = round2(input.subtotal + input.taxAmount);
+  lines.push({ account_id: apAccountId, debit: 0, credit: total, description });
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.billDate,
+    reference: input.billNo,
+    source_type: "purchase_bill",
+    source_id: input.billId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
 /**
  * Net balance of one account, optionally as of a given date (inclusive),
  * signed by its normal_balance so an Asset/Expense account reads positive

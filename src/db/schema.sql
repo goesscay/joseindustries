@@ -806,3 +806,62 @@ UPDATE expense_categories SET default_account_category = 'Other Expenses' WHERE 
 -- change in this file.
 ALTER TABLE journals ADD INDEX IF NOT EXISTS idx_journals_company_date (company_id, journal_date);
 ALTER TABLE journals ADD INDEX IF NOT EXISTS idx_journals_source (source_type, source_id);
+
+-- Phase 7A: Purchase Bills - the first real purchase-side document (vendors/
+-- expenses/vendor_payments existed before, but nothing recorded "a vendor
+-- billed us for goods/services"). Deliberately its own pair of tables, not
+-- a new doc_type on the Sales module's `documents`/`document_items` (that
+-- table pair is customer-facing and Tally-template-shaped; a purchase bill
+-- needs none of its consignee/transport/terms-template fields). Mirrors
+-- document_items' column names where the same concept applies (item_id,
+-- description, hsn_code, qty, unit, rate, tax_rate, line_total, sort_order)
+-- but adds explicit taxable_amount/tax_amount per line (this phase's own
+-- field list) and drops discount_percent (not part of this phase's scope).
+--
+-- purchase_order_id is deliberately just a plain nullable column with NO
+-- foreign key yet - Purchase Orders are explicitly not built in this phase
+-- (Phase 7A only), so there is no purchase_orders table to reference. A
+-- future phase can add the FK once that table exists; until then this
+-- column simply stays NULL for every bill (a direct Purchase Bill), which
+-- is the only path this phase supports.
+CREATE TABLE IF NOT EXISTS purchase_bills (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  bill_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  vendor_id INT UNSIGNED NOT NULL,
+  purchase_order_id INT UNSIGNED NULL,
+  status ENUM('draft', 'received', 'cancelled') NOT NULL DEFAULT 'draft',
+  bill_date DATE NOT NULL,
+  due_date DATE NULL,
+  reference_no VARCHAR(100) NULL,
+  notes TEXT NULL,
+  subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_purchase_bill_no (bill_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS purchase_bill_items (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  purchase_bill_id INT UNSIGNED NOT NULL,
+  item_id INT UNSIGNED NULL,
+  description VARCHAR(255) NOT NULL,
+  hsn_code VARCHAR(20) NULL,
+  qty DECIMAL(10, 2) NOT NULL DEFAULT 1,
+  unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+  rate DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  taxable_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  line_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+  FOREIGN KEY (purchase_bill_id) REFERENCES purchase_bills(id) ON DELETE CASCADE,
+  FOREIGN KEY (item_id) REFERENCES items(id)
+);
