@@ -57,12 +57,27 @@ export interface StockableLine {
   item_id: number | null;
   qty: number;
   unit: string;
+  /** Phase 12C: per-unit cost, GST-EXCLUSIVE, for an 'in' (purchase_receipt)
+   * movement only - per the approved model, unit_cost = the bill line's own
+   * `rate` (already pre-tax; GST stays in Input GST, never inventory cost).
+   * Ignored for 'out' movements, whose cost is always computed internally
+   * from the current weighted average at post time (see resolveSaleCost) -
+   * a caller can never set a sale's cost directly. `undefined`/`null` here
+   * (rather than a number, including 0) means "no cost known" - a real
+   * receipt at zero cost (e.g. free goods) is qty:X, unitCost:0, which is
+   * NOT the same as an unknown cost; see getStockValuation's costedQty. */
+  unitCost?: number | null;
 }
 
 export interface StockPostResult {
   posted: StockTransaction[];
   /** Lines that were deliberately NOT posted, with why - never silent. */
   skipped: { item_id: number | null; reason: "no_item" | "item_not_found" | "not_tracked" | "unit_mismatch"; detail: string }[];
+  /** Phase 12C: 'out' movements whose cost had no basis to compute from (no
+   * costed quantity ever recorded for this item) and so fell back to 0 -
+   * surfaced here, never silent, so a caller can warn the user rather than
+   * have COGS quietly understate itself in a later phase. */
+  costFallbacks: { itemId: number; itemName: string }[];
 }
 
 type Executor = Pool | PoolConnection;
@@ -128,6 +143,126 @@ export async function getStockBalance(
   return round2(balance);
 }
 
+export interface StockValuation {
+  /** Every unit currently on hand, cost-known or not - identical to
+   * getStockBalance's own number, computed independently here as a
+   * cross-check rather than trusted to always match `costedQty`. */
+  totalQty: number;
+  /** The subset of on-hand qty that is backed by a recorded `unit_cost`
+   * (real receipts/opening entries that had a cost, net of any reversals -
+   * which correctly carry the SAME unit_cost as what they reverse, so a
+   * reversed receipt's cost contribution cancels out exactly, mirroring how
+   * its quantity already cancels out). Can be LESS than totalQty when some
+   * on-hand quantity came from a cost-less source (e.g. a manual
+   * adjustment_in entered with no cost, or a pre-Phase-12C receipt). */
+  costedQty: number;
+  /** Signed sum of qty * unit_cost across every row that has a unit_cost -
+   * the total book value of the costedQty portion of on-hand stock. */
+  totalValue: number;
+  /** totalValue / costedQty, or null when costedQty is zero (or negative) -
+   * there is genuinely no cost basis to average, and this is never silently
+   * reported as 0 (see resolveSaleCost for where a 0 fallback is actually
+   * applied, and only there, explicitly flagged). */
+  averageCost: number | null;
+  /** True when totalQty and costedQty disagree (beyond rounding) - some
+   * on-hand quantity has no recorded cost. Surfaced so a future valuation
+   * report (Phase 12G) can show this honestly rather than imply full
+   * costing where none exists. */
+  hasCostGap: boolean;
+}
+
+/**
+ * Weighted-average cost valuation for one (company, item), optionally as of
+ * a given date (inclusive) - the value-side counterpart to getStockBalance,
+ * built the exact same way: sum EVERY stock_transactions row regardless of
+ * `status`, signed by txn_type. This works correctly for weighted average
+ * specifically because every 'out' movement (sale_issue/adjustment_out) is
+ * given, at the moment it's posted, the CURRENT average cost as its own
+ * unit_cost (see resolveSaleCost + postDocumentStockMovementTx) - so a flat
+ * signed sum of qty*unit_cost across all rows, in any order, already equals
+ * the correct running book value, without needing to replay history
+ * chronologically here. A reversal carries over the exact unit_cost of the
+ * row it reverses (see reverseOneStockTransactionTx), so reversing a
+ * purchase or a sale nets its value contribution to zero, exactly like its
+ * quantity already does.
+ *
+ * Company + item isolated by construction (both are mandatory WHERE
+ * clauses) - the same isolation guarantee getStockBalance already has.
+ */
+export async function getStockValuation(
+  executor: Executor,
+  companyId: number,
+  itemId: number,
+  asOfDate?: string
+): Promise<StockValuation> {
+  const dateClause = asOfDate ? "AND txn_date <= ?" : "";
+  const params = asOfDate ? [companyId, itemId, asOfDate] : [companyId, itemId];
+  const [rows] = await executor.query<any[]>(
+    `SELECT txn_type,
+            SUM(qty) as total_qty,
+            SUM(CASE WHEN unit_cost IS NOT NULL THEN qty ELSE 0 END) as costed_qty,
+            SUM(CASE WHEN unit_cost IS NOT NULL THEN qty * unit_cost ELSE 0 END) as costed_value
+     FROM stock_transactions
+     WHERE company_id = ? AND item_id = ? ${dateClause}
+     GROUP BY txn_type`,
+    params
+  );
+  let totalQty = 0;
+  let costedQty = 0;
+  let totalValue = 0;
+  for (const r of rows) {
+    const sign = signFor(r.txn_type as StockTxnType);
+    totalQty += sign * Number(r.total_qty);
+    costedQty += sign * Number(r.costed_qty);
+    totalValue += sign * Number(r.costed_value);
+  }
+  totalQty = round2(totalQty);
+  costedQty = round2(costedQty);
+  totalValue = round2(totalValue);
+  const averageCost = costedQty > 0.001 ? round2(totalValue / costedQty) : null;
+  return {
+    totalQty,
+    costedQty,
+    totalValue,
+    averageCost,
+    hasCostGap: Math.abs(totalQty - costedQty) > 0.001,
+  };
+}
+
+export interface ResolvedSaleCost {
+  unitCost: number;
+  /** True when there was no cost basis at all to average from (costedQty
+   * <= 0) and unitCost was set to 0 as the explicit, visible fallback -
+   * never a fabricated nonzero guess. A future COGS phase (12E) must
+   * surface this, not silently post a 0-cost COGS line as if it were a
+   * real, known figure. */
+  isFallback: boolean;
+}
+
+/**
+ * The cost to assign to the NEXT unit(s) leaving stock for this
+ * (company, item), evaluated against everything posted so far (must be
+ * called - and its result inserted - BEFORE the new 'out' row exists, so it
+ * reflects the balance as it stood immediately prior to this movement).
+ * This is the one and only place a sale's unit_cost is decided; callers
+ * never pass a cost for an 'out' movement themselves (see StockableLine).
+ *
+ * Never fabricates a plausible-looking number when no cost basis exists -
+ * falls back to exactly 0, with `isFallback: true` so it can be surfaced
+ * rather than silently treated as a real zero cost.
+ */
+export async function resolveSaleCost(
+  executor: Executor,
+  companyId: number,
+  itemId: number
+): Promise<ResolvedSaleCost> {
+  const valuation = await getStockValuation(executor, companyId, itemId);
+  if (valuation.averageCost !== null) {
+    return { unitCost: valuation.averageCost, isFallback: false };
+  }
+  return { unitCost: 0, isFallback: true };
+}
+
 /**
  * The currently-active (posted, not-itself-a-reversal) stock transactions
  * for a given source document, locked FOR UPDATE so a concurrent edit/
@@ -158,6 +293,10 @@ export interface PostStockTransactionInput {
   txnDate: string;
   txnType: StockTxnType;
   qty: number;
+  /** GST-exclusive per-unit cost, when known - undefined/null means "no
+   * cost basis recorded for this row" (see StockableLine's own note on why
+   * that's different from a real cost of 0). */
+  unitCost?: number | null;
   sourceType?: string | null;
   sourceId?: number | null;
   notes?: string | null;
@@ -177,9 +316,20 @@ export async function postStockTransactionTx(
   }
   const [result] = await conn.query<any>(
     `INSERT INTO stock_transactions
-       (company_id, item_id, txn_date, txn_type, qty, source_type, source_id, notes, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [input.companyId, input.itemId, input.txnDate, input.txnType, input.qty, input.sourceType || null, input.sourceId || null, input.notes || null, input.createdBy]
+       (company_id, item_id, txn_date, txn_type, qty, unit_cost, source_type, source_id, notes, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.companyId,
+      input.itemId,
+      input.txnDate,
+      input.txnType,
+      input.qty,
+      input.unitCost === undefined || input.unitCost === null ? null : input.unitCost,
+      input.sourceType || null,
+      input.sourceId || null,
+      input.notes || null,
+      input.createdBy,
+    ]
   );
   const [rows] = await conn.query<any[]>("SELECT * FROM stock_transactions WHERE id = ?", [result.insertId]);
   return rows[0] as StockTransaction;
@@ -192,6 +342,15 @@ export async function postStockTransactionTx(
  * rather than the original's date) and marks the original 'reversed'. The
  * original row is never edited or deleted - full audit trail, same as
  * journals.
+ *
+ * Phase 12C: the reversal carries over the EXACT SAME unit_cost as the row
+ * it reverses (never recomputed against today's average) - this is what
+ * makes getStockValuation's flat signed sum correct: a reversed receipt's
+ * value contribution cancels to exactly zero, and a reversed sale's COGS
+ * value is added back at the SAME cost it was removed at, not at whatever
+ * the average happens to be now (which may have shifted from later
+ * purchases) - the value-side equivalent of a journal reversal swapping
+ * debit/credit for the SAME amount, never a recalculated one.
  */
 async function reverseOneStockTransactionTx(
   conn: PoolConnection,
@@ -201,13 +360,14 @@ async function reverseOneStockTransactionTx(
   const reversalType = reversalTypeFor(txn.txn_type);
   const [result] = await conn.query<any>(
     `INSERT INTO stock_transactions
-       (company_id, item_id, txn_date, txn_type, qty, source_type, source_id, reverses_txn_id, notes, created_by)
-     VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?)`,
+       (company_id, item_id, txn_date, txn_type, qty, unit_cost, source_type, source_id, reverses_txn_id, notes, created_by)
+     VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       txn.company_id,
       txn.item_id,
       reversalType,
       txn.qty,
+      txn.unit_cost,
       txn.source_type,
       txn.source_id,
       txn.id,
@@ -333,8 +493,24 @@ export async function postDocumentStockMovementTx(
   }
 
   const posted: StockTransaction[] = [];
+  const costFallbacks: StockPostResult["costFallbacks"] = [];
   const txnType: StockTxnType = input.direction === "in" ? "purchase_receipt" : "sale_issue";
   for (const { line, item } of eligible) {
+    // Phase 12C: 'in' carries the caller-supplied cost through as-is (the
+    // Purchase Bill line's own rate, per the approved model - see
+    // StockableLine.unitCost). 'out' NEVER accepts a caller-supplied cost -
+    // it is always resolved here, immediately before insertion, against the
+    // balance as it stands right now (including any earlier line of this
+    // same document already posted in this same loop, since resolveSaleCost
+    // reads through the same `conn`).
+    let unitCost: number | null | undefined = input.direction === "in" ? line.unitCost : undefined;
+    if (input.direction === "out") {
+      const resolved = await resolveSaleCost(conn, input.companyId, item.id);
+      unitCost = resolved.unitCost;
+      if (resolved.isFallback) {
+        costFallbacks.push({ itemId: item.id, itemName: item.name });
+      }
+    }
     posted.push(
       await postStockTransactionTx(conn, {
         companyId: input.companyId,
@@ -342,6 +518,7 @@ export async function postDocumentStockMovementTx(
         txnDate: input.txnDate,
         txnType,
         qty: line.qty,
+        unitCost,
         sourceType: input.sourceType,
         sourceId: input.sourceId,
         createdBy: input.createdBy,
@@ -349,7 +526,7 @@ export async function postDocumentStockMovementTx(
     );
   }
 
-  return { posted, skipped };
+  return { posted, skipped, costFallbacks };
 }
 
 // ---- Manual entry points (opening stock / adjustments) - both are
@@ -362,6 +539,11 @@ export interface OpeningStockInput {
   itemId: number;
   txnDate: string;
   qty: number;
+  /** Phase 12C: optional GST-exclusive per-unit cost - when provided, seeds
+   * the weighted-average calculation with qty * unitCost. When omitted, the
+   * quantity is still recorded (unchanged behavior) but contributes nothing
+   * to getStockValuation's costedQty/totalValue - never fabricated. */
+  unitCost?: number | null;
   notes?: string | null;
   createdBy: number | null;
 }
@@ -379,6 +561,9 @@ export interface OpeningStockInput {
 export async function postOpeningStockTx(input: OpeningStockInput): Promise<StockTransaction> {
   if (input.qty <= 0) {
     throw new InventoryError("Opening stock quantity must be greater than zero");
+  }
+  if (input.unitCost !== undefined && input.unitCost !== null && input.unitCost < 0) {
+    throw new InventoryError("Opening stock unit cost cannot be negative");
   }
   const conn = await pool.getConnection();
   try {
@@ -404,6 +589,7 @@ export async function postOpeningStockTx(input: OpeningStockInput): Promise<Stoc
       txnDate: input.txnDate,
       txnType: "opening",
       qty: input.qty,
+      unitCost: input.unitCost,
       sourceType: "opening",
       sourceId: null,
       notes: input.notes,

@@ -268,10 +268,11 @@ export function OpeningStockPage() {
         item_id: values.item_id,
         txn_date: values.txn_date.format("YYYY-MM-DD"),
         qty: values.qty,
+        unit_cost: values.unit_cost ?? null,
         notes: values.notes || null,
       });
       message.success("Opening stock recorded");
-      form.resetFields(["item_id", "qty", "notes"]);
+      form.resetFields(["item_id", "qty", "unit_cost", "notes"]);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "Failed to record opening stock");
     } finally {
@@ -301,6 +302,13 @@ export function OpeningStockPage() {
           </Form.Item>
           <Form.Item name="qty" label="Opening Quantity" rules={[{ required: true, message: "Quantity is required" }]}>
             <InputNumber style={{ width: "100%" }} min={0.01} />
+          </Form.Item>
+          <Form.Item
+            name="unit_cost"
+            label="Unit Cost (optional)"
+            tooltip="GST-exclusive cost per unit. Leave blank if unknown - it will never be guessed; the item's weighted-average cost will simply reflect only the quantity that has a recorded cost."
+          >
+            <InputNumber style={{ width: "100%" }} min={0} placeholder="Leave blank if unknown" />
           </Form.Item>
           <Form.Item name="notes" label="Notes">
             <Input.TextArea rows={2} />

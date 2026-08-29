@@ -55,7 +55,7 @@ inventoryRouter.post(
   "/opening-stock",
   requireModuleAccess("inventory.stock", "create"),
   asyncHandler(async (req, res) => {
-    const { company_id, item_id, txn_date, qty, notes } = req.body ?? {};
+    const { company_id, item_id, txn_date, qty, unit_cost, notes } = req.body ?? {};
     if (!company_id || !item_id || !txn_date || qty === undefined) {
       return res.status(400).json({ message: "company_id, item_id, txn_date and qty are required" });
     }
@@ -65,6 +65,7 @@ inventoryRouter.post(
         itemId: Number(item_id),
         txnDate: txn_date,
         qty: Number(qty),
+        unitCost: unit_cost !== undefined && unit_cost !== null && unit_cost !== "" ? Number(unit_cost) : null,
         notes: notes || null,
         createdBy: req.user!.sub,
       });

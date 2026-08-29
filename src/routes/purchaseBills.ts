@@ -490,7 +490,11 @@ purchaseBillsRouter.put(
           sourceId: id,
           txnDate: bill_date,
           direction: "in",
-          lines: lines.map((l) => ({ item_id: l.item_id, qty: l.qty, unit: l.unit })),
+          // Phase 12C: unit_cost = the bill line's own (GST-exclusive) rate,
+          // per the approved valuation model - purchase_bill_items has no
+          // discount, so `rate` is already the final per-unit cost, nothing
+          // else to net out.
+          lines: lines.map((l) => ({ item_id: l.item_id, qty: l.qty, unit: l.unit, unitCost: l.rate })),
           createdBy: req.user!.sub,
         });
       }

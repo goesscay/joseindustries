@@ -377,7 +377,7 @@ export function createSalesDocumentRouter(
           document: created,
           items: docItems,
           journal: journal ? { id: journal.id, status: journal.status } : null,
-          stock: stock ? { posted: stock.posted.length, skipped: stock.skipped } : null,
+          stock: stock ? { posted: stock.posted.length, skipped: stock.skipped, costFallbacks: stock.costFallbacks } : null,
         });
       } catch (err) {
         await conn.rollback();
@@ -578,7 +578,7 @@ export function createSalesDocumentRouter(
           document: updated,
           items: docItems,
           journal: journal ? { id: journal.id, status: journal.status } : null,
-          stock: stock ? { posted: stock.posted.length, skipped: stock.skipped } : null,
+          stock: stock ? { posted: stock.posted.length, skipped: stock.skipped, costFallbacks: stock.costFallbacks } : null,
         });
       } catch (err) {
         await conn.rollback();
