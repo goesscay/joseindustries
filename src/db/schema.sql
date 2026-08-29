@@ -485,3 +485,255 @@ CREATE TABLE IF NOT EXISTS leads (
   FOREIGN KEY (converted_customer_id) REFERENCES customers(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
+
+-- ============================================================================
+-- Phase 2: Accounting foundation - Chart of Accounts + double-entry Journals.
+--
+-- Added ALONGSIDE the existing accounts / journal_entries tables above,
+-- which are left completely untouched and keep working exactly as before
+-- (Bank & Cash balances, the manual journal/transfer UI, Day Book, Party
+-- Ledger, Profit & Loss, GST Summary, Outstanding - none of that reads from
+-- or depends on anything below). Nothing in this block is wired into
+-- receipts/vendor_payments/expenses/sales documents yet - see
+-- src/services/accounting.ts for the posting rules this lays the ground for
+-- and why that wiring is deliberately a separate, later step.
+-- ============================================================================
+
+-- One full Chart of Accounts per company (Jose Enterprises and Jose
+-- Industries keep entirely separate books, same as the existing `accounts`
+-- Bank/Cash table). `category` is a free-text sub-classification (Cash,
+-- Bank, Accounts Receivable, Cost of Goods Sold, ...) rather than an ENUM,
+-- so new categories never need a schema migration - only `account_type` is
+-- constrained, since that drives which financial statement an account rolls
+-- up into. `parent_id` gives the code/name hierarchy (1000 Assets -> 1100
+-- Current Assets -> 1110 Cash) without hard-coding it anywhere in the app;
+-- every account is independently postable regardless of whether it has
+-- children (no separate "group vs leaf" flag - keeps this first pass simple).
+CREATE TABLE IF NOT EXISTS chart_of_accounts (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  parent_id INT UNSIGNED NULL,
+  account_code VARCHAR(20) NOT NULL,
+  name VARCHAR(150) NOT NULL,
+  account_type ENUM('asset', 'liability', 'equity', 'revenue', 'expense') NOT NULL,
+  category VARCHAR(100) NULL,
+  normal_balance ENUM('debit', 'credit') NOT NULL,
+  description TEXT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  -- System/default accounts (seeded below) can't be deleted by users - only
+  -- deactivated - since journals may already reference them and the
+  -- standard financial-statement rollups assume they exist.
+  is_system BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_coa_code (company_id, account_code),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (parent_id) REFERENCES chart_of_accounts(id)
+);
+
+-- Journal header. Every accounting transaction - however it was triggered -
+-- is one row here plus >=2 balanced lines in journal_lines below.
+-- source_type/source_id optionally point back at whatever business
+-- transaction caused this posting (e.g. 'receipt' + receipts.id) once that
+-- wiring exists; both stay NULL for manually-entered journals. A journal is
+-- created already `posted` (this app has no draft/approval workflow for
+-- money movements anywhere today - receipts/vendor_payments/expenses are
+-- all immediate, final rows too) and is never edited in place - correcting
+-- one means posting an offsetting reversal, tracked via
+-- reverses_journal_id, which is how "posted journals aren't casually
+-- edited" is enforced (there's deliberately no update route at all).
+CREATE TABLE IF NOT EXISTS journals (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  journal_date DATE NOT NULL,
+  reference VARCHAR(100) NULL,
+  source_type VARCHAR(30) NULL,
+  source_id INT UNSIGNED NULL,
+  description VARCHAR(255) NULL,
+  status ENUM('posted', 'reversed') NOT NULL DEFAULT 'posted',
+  reverses_journal_id INT UNSIGNED NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (reverses_journal_id) REFERENCES journals(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Journal lines - the actual debit/credit postings. A journal only balances
+-- (Step 4's "Total Debits = Total Credits") when every one of its lines'
+-- amounts are summed, which src/services/accounting.ts enforces in a
+-- transaction before commit - not something a single-row CHECK constraint
+-- can express. The two CHECKs here are the part that *can* be enforced at
+-- the database layer as defense-in-depth: an amount is never negative, and
+-- a single line is never both a debit and a credit at once.
+CREATE TABLE IF NOT EXISTS journal_lines (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  journal_id INT UNSIGNED NOT NULL,
+  account_id INT UNSIGNED NOT NULL,
+  debit DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  credit DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  description VARCHAR(255) NULL,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+  CHECK (debit >= 0 AND credit >= 0),
+  CHECK (debit = 0 OR credit = 0),
+  FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE,
+  FOREIGN KEY (account_id) REFERENCES chart_of_accounts(id)
+);
+
+-- Standard starter Chart of Accounts, seeded per company (idempotent - the
+-- uniq_coa_code key makes this INSERT IGNORE safe to re-run on every
+-- migrate, same pattern as the accounts/tax_rates/payment_terms seeds
+-- above). Codes leave room to insert siblings later (1110, 1120, 1130... ->
+-- could add 1115 without renumbering anything) and match the structure
+-- given in the Phase 2 spec exactly, extended with the remaining named
+-- categories (Inventory, Fixed Assets, Loans, Capital, Retained Earnings,
+-- Drawings, Service Revenue, Other Income, and the Expense subcategories).
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1000', 'Assets', 'asset', NULL, 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1100', 'Current Assets', 'asset', NULL, 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1110', 'Cash', 'asset', 'Cash', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1120', 'Bank', 'asset', 'Bank', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1130', 'Accounts Receivable', 'asset', 'Accounts Receivable', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1140', 'Inventory', 'asset', 'Inventory', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1150', 'Other Current Assets', 'asset', 'Other Current Assets', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1200', 'Fixed Assets', 'asset', 'Fixed Assets', 'debit', TRUE FROM companies;
+
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2000', 'Liabilities', 'liability', NULL, 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2100', 'Current Liabilities', 'liability', NULL, 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2110', 'Accounts Payable', 'liability', 'Accounts Payable', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2120', 'GST Payable', 'liability', 'GST/Tax Payable', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2130', 'Other Current Liabilities', 'liability', 'Other Current Liabilities', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2200', 'Loans', 'liability', 'Loans', 'credit', TRUE FROM companies;
+
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '3000', 'Equity', 'equity', NULL, 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '3100', 'Capital', 'equity', 'Capital', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '3200', 'Retained Earnings', 'equity', 'Retained Earnings', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '3300', 'Drawings', 'equity', 'Drawings', 'debit', TRUE FROM companies;
+
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '4000', 'Revenue', 'revenue', NULL, 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '4100', 'Sales', 'revenue', 'Sales', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '4200', 'Service Revenue', 'revenue', 'Service Revenue', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '4300', 'Other Income', 'revenue', 'Other Income', 'credit', TRUE FROM companies;
+
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5000', 'Expenses', 'expense', NULL, 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5100', 'Cost of Goods Sold', 'expense', 'Cost of Goods Sold', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5200', 'Purchases', 'expense', 'Purchases', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5300', 'Salaries', 'expense', 'Salaries', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5400', 'Rent', 'expense', 'Rent', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5500', 'Utilities', 'expense', 'Utilities', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5600', 'Travel', 'expense', 'Travel', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5700', 'Office Expenses', 'expense', 'Office Expenses', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5800', 'Bank Charges', 'expense', 'Bank Charges', 'debit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5900', 'Other Expenses', 'expense', 'Other Expenses', 'debit', TRUE FROM companies;
+
+-- Wire up the parent/child hierarchy now that every row above exists (can't
+-- self-reference a sibling's id in the same INSERT). Safe to re-run - it's
+-- just re-pointing the same rows at the same parents every time.
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '1000'
+SET child.parent_id = parent.id
+WHERE child.account_code = '1100';
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '1100'
+SET child.parent_id = parent.id
+WHERE child.account_code IN ('1110', '1120', '1130', '1140', '1150');
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '1000'
+SET child.parent_id = parent.id
+WHERE child.account_code = '1200';
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '2000'
+SET child.parent_id = parent.id
+WHERE child.account_code = '2100';
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '2100'
+SET child.parent_id = parent.id
+WHERE child.account_code IN ('2110', '2120', '2130');
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '2000'
+SET child.parent_id = parent.id
+WHERE child.account_code = '2200';
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '3000'
+SET child.parent_id = parent.id
+WHERE child.account_code IN ('3100', '3200', '3300');
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '4000'
+SET child.parent_id = parent.id
+WHERE child.account_code IN ('4100', '4200', '4300');
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '5000'
+SET child.parent_id = parent.id
+WHERE child.account_code IN ('5100', '5200', '5300', '5400', '5500', '5600', '5700', '5800', '5900');
+
+-- Optional link from an existing Bank & Cash account (accounts.ts) to the
+-- Chart-of-Accounts leaf it corresponds to, for when journal-posting is
+-- wired in later - nullable, no FK constraint added via ALTER (MariaDB's
+-- IF NOT EXISTS support doesn't extend to ADD CONSTRAINT, same reasoning as
+-- receipts.account_id/vendor_payments.account_id above). Backfilled
+-- deterministically by account_type (every 'cash' row -> the company's
+-- "1110 Cash" leaf, every 'bank' row -> "1120 Bank") since that mapping is
+-- unambiguous and safe; only fills blanks, so a manually-changed link is
+-- never overwritten on a later migrate.
+ALTER TABLE accounts
+  ADD COLUMN IF NOT EXISTS chart_account_id INT UNSIGNED NULL;
+
+UPDATE accounts a
+JOIN chart_of_accounts coa
+  ON coa.company_id = a.company_id AND coa.account_code = '1110'
+SET a.chart_account_id = coa.id
+WHERE a.account_type = 'cash' AND a.chart_account_id IS NULL;
+
+UPDATE accounts a
+JOIN chart_of_accounts coa
+  ON coa.company_id = a.company_id AND coa.account_code = '1120'
+SET a.chart_account_id = coa.id
+WHERE a.account_type = 'bank' AND a.chart_account_id IS NULL;

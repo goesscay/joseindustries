@@ -26,6 +26,13 @@ export const PERMISSION_MODULES: ModuleDef[] = [
 
   { key: "banking.accounts", label: "Bank & Cash", group: "Banking" },
 
+  // Phase 2 accounting foundation - no frontend page consumes this yet
+  // (backend-only for now), but the module key exists so its routes are
+  // gated the same way as every other module and the Users & Roles grid
+  // is ready for it once a Chart of Accounts screen is built.
+  { key: "accounting.chart_of_accounts", label: "Chart of Accounts", group: "Accounting" },
+  { key: "accounting.journals", label: "Journals", group: "Accounting" },
+
   { key: "contacts.customers", label: "Customers", group: "Contacts" },
   { key: "contacts.vendors", label: "Vendors", group: "Contacts" },
 

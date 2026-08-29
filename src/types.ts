@@ -325,6 +325,76 @@ export interface LedgerEntry {
   running_balance: number;
 }
 
+// ---- Phase 2: Accounting foundation (Chart of Accounts + double-entry
+// journals). Additive - sits alongside JournalEntry/LedgerEntry above,
+// which stay exactly as they are for the existing Bank & Cash module. ----
+
+export type LedgerAccountType = "asset" | "liability" | "equity" | "revenue" | "expense";
+export type NormalBalance = "debit" | "credit";
+
+export interface ChartOfAccount {
+  id: number;
+  company_id: number;
+  parent_id: number | null;
+  account_code: string;
+  name: string;
+  account_type: LedgerAccountType;
+  category: string | null;
+  normal_balance: NormalBalance;
+  description: string | null;
+  is_active: boolean | number;
+  is_system: boolean | number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type JournalStatus = "posted" | "reversed";
+
+export interface Journal {
+  id: number;
+  company_id: number;
+  journal_date: string;
+  reference: string | null;
+  source_type: string | null;
+  source_id: number | null;
+  description: string | null;
+  status: JournalStatus;
+  reverses_journal_id: number | null;
+  created_by: number | null;
+  created_at: string;
+}
+
+export interface JournalLine {
+  id: number;
+  journal_id: number;
+  account_id: number;
+  debit: string;
+  credit: string;
+  description: string | null;
+  sort_order: number;
+}
+
+/** Input shape for one line when posting a new journal - amounts are plain
+ * numbers here (not yet the DB's string-decimal form) since nothing has
+ * been inserted yet. */
+export interface JournalLineInput {
+  account_id: number;
+  debit: number;
+  credit: number;
+  description?: string | null;
+}
+
+export interface CreateJournalInput {
+  company_id: number;
+  journal_date: string;
+  reference?: string | null;
+  source_type?: string | null;
+  source_id?: number | null;
+  description?: string | null;
+  created_by?: number | null;
+  lines: JournalLineInput[];
+}
+
 declare global {
   namespace Express {
     interface Request {
