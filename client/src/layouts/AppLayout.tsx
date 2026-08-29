@@ -30,6 +30,8 @@ import {
   FileProtectOutlined,
   SafetyOutlined,
   UserAddOutlined,
+  ProfileOutlined,
+  RollbackOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { ROUTE_MODULE } from "../constants/routeModules";
@@ -40,13 +42,26 @@ const { useBreakpoint } = Grid;
 
 type NavItem = Required<MenuProps>["items"][number];
 
-// Menu item keys must be unique across the whole tree, but "Bank Accounts"
-// under Settings is deliberately a shortcut to the same page as "Bank &
-// Cash" under Banking - give it its own key and resolve it to the real
-// route on click instead of reusing "/accounts" twice.
+// Menu item keys must be unique across the whole tree, but a couple of
+// items are deliberately shortcuts to a page that already lives elsewhere
+// in the nav ("Bank Accounts" under Settings -> Banking's "Bank & Cash";
+// "Customers" under Sales -> Contacts' "Customers") - each gets its own key
+// here, resolved to the real route on click instead of reusing a key twice.
 const KEY_ALIASES: Record<string, string> = {
   "/settings/bank-accounts": "/accounts",
+  "/sales/customers": "/customers",
 };
+
+// Not implemented yet - shown in the Sales menu per the current nav spec so
+// the module list is visible up front, but disabled (no route, nothing to
+// click through to) rather than faked.
+function comingSoonLabel(text: string) {
+  return (
+    <span>
+      {text} <span style={{ fontSize: 11, color: "#bfbfbf" }}>(Coming soon)</span>
+    </span>
+  );
+}
 
 export function AppLayout() {
   const { user, logout, can } = useAuth();
@@ -67,10 +82,13 @@ export function AppLayout() {
               label: "Sales",
               children: [
                 { key: "/leads", icon: <UserAddOutlined />, label: "Leads" },
+                { key: "/sales/customers", icon: <ContactsOutlined />, label: "Customers" },
                 { key: "/quotations", icon: <FileTextOutlined />, label: "Quotations" },
                 { key: "/proforma-invoices", icon: <FileDoneOutlined />, label: "Proforma Invoices" },
+                { key: "/sales/orders", icon: <ProfileOutlined />, label: comingSoonLabel("Sales Orders"), disabled: true },
                 { key: "/delivery-challans", icon: <CarOutlined />, label: "Delivery Challans" },
                 { key: "/tax-invoices", icon: <AuditOutlined />, label: "Tax Invoices" },
+                { key: "/sales/credit-notes", icon: <RollbackOutlined />, label: comingSoonLabel("Credit Notes"), disabled: true },
                 { key: "/receipts", icon: <WalletOutlined />, label: "Receipts" },
               ],
             },

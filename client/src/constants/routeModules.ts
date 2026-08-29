@@ -23,6 +23,12 @@ export const ROUTE_MODULE: Record<string, string> = {
   "/expense-categories": "expenses.expense_categories",
   "/accounts": "banking.accounts",
   "/customers": "contacts.customers",
+  // Alias: "Customers" is also shown directly under Sales (per the Sales
+  // nav requirements), pointing at the same page as Contacts > Customers.
+  // Kept after the canonical "/customers" entry above so firstAccessibleRoute
+  // always prefers the real route over this shortcut - same convention as
+  // "/settings/bank-accounts" below.
+  "/sales/customers": "contacts.customers",
   "/vendors": "contacts.vendors",
   "/items": "items.items",
   "/reports": "reports.reports",
