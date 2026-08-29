@@ -737,3 +737,24 @@ JOIN chart_of_accounts coa
   ON coa.company_id = a.company_id AND coa.account_code = '1120'
 SET a.chart_account_id = coa.id
 WHERE a.account_type = 'bank' AND a.chart_account_id IS NULL;
+
+-- Phase 4: Tax Invoice accounting needs to distinguish Output CGST / Output
+-- SGST / Output IGST separately (a Tax Invoice's GST fields are already
+-- split this way - see documents.cgst_total/sgst_total/igst_total). The
+-- existing '2120' 'GST Payable' node predates this and is left completely
+-- untouched (still available for manual/GST-return entries that want one
+-- combined account) - these are new siblings under Current Liabilities,
+-- never renumbering anything above. Idempotent via uniq_coa_code, same as
+-- every other chart_of_accounts seed row.
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2121', 'Output CGST', 'liability', 'Output CGST', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2122', 'Output SGST', 'liability', 'Output SGST', 'credit', TRUE FROM companies;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '2123', 'Output IGST', 'liability', 'Output IGST', 'credit', TRUE FROM companies;
+
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '2100'
+SET child.parent_id = parent.id
+WHERE child.account_code IN ('2121', '2122', '2123');

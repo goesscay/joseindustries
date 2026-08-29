@@ -7,7 +7,8 @@ import { getNextDocNumber } from "../services/numbering";
 import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
-import { Company, Customer, DocType, DocumentItem, DocumentRecord, Role } from "../types";
+import { AccountingError, getJournalBySource, postTaxInvoiceJournalTx, reverseJournalTx } from "../services/accounting";
+import { Company, Customer, DocType, DocumentItem, DocumentRecord, Journal, Role } from "../types";
 
 export interface SalesDocumentRouterOptions {
   /**
@@ -321,12 +322,37 @@ export function createSalesDocumentRouter(
           );
         }
 
+        // Only a FINAL Tax Invoice creates the accounting journal - Leads,
+        // Quotations, Proforma Invoices and Delivery Challans never do,
+        // since this same factory function is shared across all of them
+        // and docType is the only thing distinguishing this call.
+        let journal: Journal | undefined;
+        if (docType === "tax_invoice") {
+          journal = await postTaxInvoiceJournalTx(conn, {
+            companyId: Number(company_id),
+            invoiceId: documentId,
+            invoiceNo: docNumber,
+            issueDate: issue_date,
+            grandTotal,
+            taxTotal,
+            cgstTotal,
+            sgstTotal,
+            igstTotal,
+            createdBy: req.user!.sub,
+          });
+        }
+
         await conn.commit();
         const created = await findById(documentId);
         const docItems = await findItemsForDocument(documentId);
-        res.status(201).json({ document: created, items: docItems });
+        res
+          .status(201)
+          .json({ document: created, items: docItems, journal: journal ? { id: journal.id, status: journal.status } : null });
       } catch (err) {
         await conn.rollback();
+        if (err instanceof AccountingError) {
+          return res.status(400).json({ message: `${title} could not be recorded: ${err.message}` });
+        }
         throw err;
       } finally {
         conn.release();
@@ -453,12 +479,45 @@ export function createSalesDocumentRouter(
             ]
           );
         }
+        // A posted journal is never edited in place: reverse whatever
+        // journal currently exists for this invoice (if any) and post a
+        // fresh one for the corrected figures, in the same transaction as
+        // the document update above. The UPDATE statement just above this
+        // already took an exclusive row lock on this document for the rest
+        // of the transaction, so a concurrent edit of the same invoice is
+        // already serialized by the time we get here - no separate FOR
+        // UPDATE needed (see receipts.ts/vendorPayments.ts for the pattern
+        // this mirrors, where the lock had to be taken explicitly first
+        // because nothing else in that handler took one).
+        let journal: Journal | undefined;
+        if (docType === "tax_invoice") {
+          const priorJournal = await getJournalBySource("tax_invoice", id);
+          if (priorJournal) {
+            await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+          }
+          journal = await postTaxInvoiceJournalTx(conn, {
+            companyId: Number(company_id),
+            invoiceId: id,
+            invoiceNo: existing.doc_number,
+            issueDate: issue_date,
+            grandTotal,
+            taxTotal,
+            cgstTotal,
+            sgstTotal,
+            igstTotal,
+            createdBy: req.user!.sub,
+          });
+        }
+
         await conn.commit();
         const updated = await findById(id);
         const docItems = await findItemsForDocument(id);
-        res.json({ document: updated, items: docItems });
+        res.json({ document: updated, items: docItems, journal: journal ? { id: journal.id, status: journal.status } : null });
       } catch (err) {
         await conn.rollback();
+        if (err instanceof AccountingError) {
+          return res.status(400).json({ message: `${title} could not be updated: ${err.message}` });
+        }
         throw err;
       } finally {
         conn.release();
@@ -490,13 +549,46 @@ export function createSalesDocumentRouter(
     requireModuleAccess(MODULE, "delete"),
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id);
-      const existing = await findById(id);
-      if (!existing) return res.status(404).json({ message: `${title} not found` });
-      if (existing.status !== "draft") {
-        return res.status(400).json({ message: `Only draft ${title.toLowerCase()}s can be deleted` });
+      // Transactional (unlike before) so a Tax Invoice's journal reversal
+      // and the document delete either both happen or neither does - the
+      // existing "only draft can be deleted" business rule is unchanged
+      // for every doc type, just now evaluated inside that transaction.
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        const [existingRows] = await conn.query<any[]>(
+          "SELECT * FROM documents WHERE id = ? AND doc_type = ? FOR UPDATE",
+          [id, docType]
+        );
+        const existing = existingRows[0] as DocumentRecord | undefined;
+        if (!existing) {
+          await conn.rollback();
+          return res.status(404).json({ message: `${title} not found` });
+        }
+        if (existing.status !== "draft") {
+          await conn.rollback();
+          return res.status(400).json({ message: `Only draft ${title.toLowerCase()}s can be deleted` });
+        }
+
+        if (docType === "tax_invoice") {
+          const priorJournal = await getJournalBySource("tax_invoice", id);
+          if (priorJournal) {
+            await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+          }
+        }
+
+        await conn.query("DELETE FROM documents WHERE id = ?", [id]);
+        await conn.commit();
+        res.json({ message: `${title} deleted` });
+      } catch (err) {
+        await conn.rollback();
+        if (err instanceof AccountingError) {
+          return res.status(400).json({ message: `${title} could not be deleted: ${err.message}` });
+        }
+        throw err;
+      } finally {
+        conn.release();
       }
-      await pool.query("DELETE FROM documents WHERE id = ?", [id]);
-      res.json({ message: `${title} deleted` });
     })
   );
 

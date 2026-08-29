@@ -433,6 +433,83 @@ export async function postVendorPaymentJournalTx(
   });
 }
 
+export interface PostTaxInvoiceJournalInput {
+  companyId: number;
+  invoiceId: number;
+  invoiceNo: string;
+  issueDate: string;
+  grandTotal: number;
+  taxTotal: number;
+  cgstTotal: number;
+  sgstTotal: number;
+  igstTotal: number;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Accounts Receivable (full grand total), Cr Sales Revenue (grand total
+ * minus tax - this absorbs freight/installation charges and the rounding
+ * residual along with the taxable value, since none of those get their own
+ * dedicated ledger account in this phase), Cr Output CGST/SGST/IGST (split
+ * exactly as the invoice's own already-computed cgst_total/sgst_total/
+ * igst_total - never recomputed here). Only the GST lines that are
+ * actually nonzero are included (an interstate invoice has no CGST/SGST
+ * line; a 0%-GST invoice has no GST line at all) - validateJournalLines
+ * would reject a zero-amount line anyway. Must run on a `conn` already
+ * inside the caller's transaction (see createJournalTx).
+ */
+export async function postTaxInvoiceJournalTx(conn: PoolConnection, input: PostTaxInvoiceJournalInput): Promise<Journal> {
+  const arAccountId = await getSystemAccountByCategory(input.companyId, "Accounts Receivable");
+  if (!arAccountId) {
+    throw new AccountingError("Accounts Receivable system account not found for this company");
+  }
+  const revenueAccountId = await getSystemAccountByCategory(input.companyId, "Sales");
+  if (!revenueAccountId) {
+    throw new AccountingError("Sales Revenue system account not found for this company");
+  }
+
+  const description = `Tax Invoice ${input.invoiceNo}`;
+  const revenueAmount = round2(input.grandTotal - input.taxTotal);
+  const lines: JournalLineInput[] = [{ account_id: arAccountId, debit: input.grandTotal, credit: 0, description }];
+  if (revenueAmount > 0) {
+    lines.push({ account_id: revenueAccountId, debit: 0, credit: revenueAmount, description });
+  }
+
+  if (input.igstTotal > 0) {
+    const igstAccountId = await getSystemAccountByCategory(input.companyId, "Output IGST");
+    if (!igstAccountId) {
+      throw new AccountingError("Output IGST system account not found for this company");
+    }
+    lines.push({ account_id: igstAccountId, debit: 0, credit: input.igstTotal, description });
+  } else {
+    if (input.cgstTotal > 0) {
+      const cgstAccountId = await getSystemAccountByCategory(input.companyId, "Output CGST");
+      if (!cgstAccountId) {
+        throw new AccountingError("Output CGST system account not found for this company");
+      }
+      lines.push({ account_id: cgstAccountId, debit: 0, credit: input.cgstTotal, description });
+    }
+    if (input.sgstTotal > 0) {
+      const sgstAccountId = await getSystemAccountByCategory(input.companyId, "Output SGST");
+      if (!sgstAccountId) {
+        throw new AccountingError("Output SGST system account not found for this company");
+      }
+      lines.push({ account_id: sgstAccountId, debit: 0, credit: input.sgstTotal, description });
+    }
+  }
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.issueDate,
+    reference: input.invoiceNo,
+    source_type: "tax_invoice",
+    source_id: input.invoiceId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
 /**
  * Net balance of one account, optionally as of a given date (inclusive),
  * signed by its normal_balance so an Asset/Expense account reads positive
