@@ -1039,3 +1039,139 @@ export async function getProfitAndLoss(companyId: number, from: string, to: stri
     netProfit: round2(totalIncome - totalExpenses),
   };
 }
+
+export interface BalanceSheetRow {
+  /** Null only for the synthesized "Retained Earnings (Current)" row - see
+   * getBalanceSheet's doc comment. Every real chart_of_accounts row has one. */
+  account_id: number | null;
+  account_code: string | null;
+  name: string;
+  category: string | null;
+  amount: number;
+}
+
+export interface BalanceSheetResult {
+  asOfDate: string;
+  assets: BalanceSheetRow[];
+  liabilities: BalanceSheetRow[];
+  /** Includes the synthesized "Retained Earnings (Current)" row alongside
+   * the real (today: always zero) stored Capital/Retained Earnings/Drawings
+   * balances - see doc comment below for why that row exists. */
+  equity: BalanceSheetRow[];
+  totalAssets: number;
+  totalLiabilities: number;
+  totalEquity: number;
+  /** True when totalAssets === totalLiabilities + totalEquity - a defensive
+   * integrity check, surfaced honestly, never silently corrected, same as
+   * getTrialBalance's isBalanced. */
+  isBalanced: boolean;
+}
+
+/**
+ * Built entirely from journals + journal_lines + chart_of_accounts (never
+ * accounts.opening_balance or the old journal_entries table - those are a
+ * completely separate, ledger-invisible balance system for the pre-existing
+ * Bank & Cash module; see Phase 9's audit for the full explanation of why
+ * this report's Cash/Bank figures may not match that module's own displayed
+ * balance whenever either is nonzero for a given company). For one
+ * company's active asset/liability/equity accounts, as of `asOfDate`
+ * (inclusive) - a Balance Sheet is a point-in-time snapshot, not a range,
+ * so this takes a single date the same way getTrialBalance does.
+ *
+ * Sums every journal line up to asOfDate regardless of `status` - same
+ * reasoning as getTrialBalance/getProfitAndLoss: a reversed original and
+ * its posted reversal must both be summed for an edited/deleted
+ * transaction's net contribution to come out correct (zero if fully
+ * reversed), never silently wrong by double the reversed amount. There is
+ * absolutely no `status = 'posted'` filter anywhere in this function's
+ * arithmetic.
+ *
+ * Revenue/expense accounts are never queried directly here - but their
+ * *effect* still has to appear somewhere on the Equity side, because this
+ * app has no year-end closing mechanism (nothing ever sweeps Sales/
+ * Expenses balances into Retained Earnings - confirmed by Phase 9's audit:
+ * Retained Earnings is a seeded account with zero postings, ever). Without
+ * accounting for that activity, `Assets = Liabilities + Equity` could never
+ * hold, since a balanced double-entry ledger only guarantees
+ * `Assets + Expenses = Liabilities + Equity + Revenue` across ALL FIVE
+ * account types together - rearranged, `Assets = Liabilities + Equity +
+ * (Revenue - Expenses)`. So the missing `(Revenue - Expenses)` term - every
+ * revenue/expense journal line ever posted, from the beginning of time
+ * through asOfDate - is computed via getProfitAndLoss and injected as one
+ * extra, clearly-marked equity row: "Retained Earnings (Current)". This
+ * row is NEVER a chart_of_accounts record and NEVER backed by a journal
+ * entry - it is a pure display computation, re-derived on every call, and
+ * is what makes the identity hold for a system with no formal period close.
+ * The real, separately-seeded `3200 Retained Earnings` account is left
+ * completely alone alongside it (today: always zero, since nothing posts
+ * to it) - the two are never merged into one figure.
+ *
+ * An account with zero net activity as of asOfDate is omitted, same
+ * convention as getTrialBalance. Company isolation is structural
+ * (`coa.company_id = ?` in the query itself) - there is no separate
+ * account_id parameter for a cross-company mismatch to even be possible.
+ * isBalanced is a defensive, honest check - this function never forces
+ * totalAssets to equal totalLiabilities + totalEquity; if a manually-posted
+ * journal or a real accounting-integrity problem breaks the identity, that
+ * is surfaced as `isBalanced: false`, exactly like getTrialBalance already
+ * does for its own totals.
+ */
+export async function getBalanceSheet(companyId: number, asOfDate: string): Promise<BalanceSheetResult> {
+  const [rows] = await pool.query<any[]>(
+    `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category,
+            COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) as net
+     FROM chart_of_accounts coa
+     LEFT JOIN journal_lines jl ON jl.account_id = coa.id
+     LEFT JOIN journals j ON j.id = jl.journal_id AND j.journal_date <= ?
+     WHERE coa.company_id = ? AND coa.is_active = 1 AND coa.account_type IN ('asset', 'liability', 'equity')
+     GROUP BY coa.id, coa.account_code, coa.name, coa.account_type, coa.category
+     HAVING net <> 0
+     ORDER BY coa.account_code ASC`,
+    [asOfDate, companyId]
+  );
+
+  const assets: BalanceSheetRow[] = [];
+  const liabilities: BalanceSheetRow[] = [];
+  const equity: BalanceSheetRow[] = [];
+  for (const r of rows) {
+    const net = round2(Number(r.net));
+    const row: BalanceSheetRow = {
+      account_id: r.account_id,
+      account_code: r.account_code,
+      name: r.name,
+      category: r.category,
+      // Assets are debit-normal (positive net -> a real balance); liabilities
+      // and equity are credit-normal (negative net -> a real balance) - same
+      // sign convention getTrialBalance already uses, just split by section
+      // instead of into a single debit/credit pair of columns.
+      amount: r.account_type === "asset" ? net : -net,
+    };
+    if (r.account_type === "asset") assets.push(row);
+    else if (r.account_type === "liability") liabilities.push(row);
+    else equity.push(row);
+  }
+
+  const { netProfit } = await getProfitAndLoss(companyId, "1900-01-01", asOfDate);
+  equity.push({
+    account_id: null,
+    account_code: null,
+    name: "Retained Earnings (Current)",
+    category: "Computed",
+    amount: netProfit,
+  });
+
+  const totalAssets = round2(assets.reduce((s, r) => s + r.amount, 0));
+  const totalLiabilities = round2(liabilities.reduce((s, r) => s + r.amount, 0));
+  const totalEquity = round2(equity.reduce((s, r) => s + r.amount, 0));
+
+  return {
+    asOfDate,
+    assets,
+    liabilities,
+    equity,
+    totalAssets,
+    totalLiabilities,
+    totalEquity,
+    isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+  };
+}

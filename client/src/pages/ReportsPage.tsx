@@ -4,6 +4,8 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs, { Dayjs } from "dayjs";
 import { api } from "../api/client";
 import {
+  BalanceSheetResult,
+  BalanceSheetRow,
   ChartOfAccount,
   Company,
   Customer,
@@ -789,6 +791,145 @@ function TrialBalanceTab({ companies }: { companies: Company[] }) {
   );
 }
 
+// Built entirely from journals + journal_lines + chart_of_accounts via
+// /api/accounting/balance-sheet (Phase 9) - never from accounts.
+// opening_balance or the old journal_entries table. The "Retained Earnings
+// (Current)" row (account_id null) is a pure display computation - the
+// all-time-to-date ledger Profit & Loss, not a postable chart_of_accounts
+// row - shown in italics so it visually reads as different in kind from
+// its real, stored-balance siblings.
+function BalanceSheetTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [asOf, setAsOf] = useState<Dayjs>(dayjs());
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<BalanceSheetResult | null>(null);
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
+
+  async function load() {
+    if (!companyId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<BalanceSheetResult>(
+        `/accounting/balance-sheet?company_id=${companyId}&as_of=${asOf.format("YYYY-MM-DD")}`
+      );
+      setResult(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load balance sheet");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, asOf]);
+
+  const columns: ColumnsType<BalanceSheetRow> = [
+    { title: "Account Code", dataIndex: "account_code", key: "account_code", width: 110, render: (v: string | null) => v || "-" },
+    {
+      title: "Account Name",
+      dataIndex: "name",
+      key: "name",
+      render: (v: string, r: BalanceSheetRow) => (r.account_id === null ? <i>{v}</i> : v),
+    },
+    {
+      title: "Amount",
+      dataIndex: "amount",
+      key: "amount",
+      align: "right",
+      render: (v: number, r: BalanceSheetRow) => (r.account_id === null ? <i>Rs. {formatMoney(v)}</i> : `Rs. ${formatMoney(v)}`),
+    },
+  ];
+
+  function summaryRow(total: number) {
+    return () => (
+      <Table.Summary fixed>
+        <Table.Summary.Row>
+          <Table.Summary.Cell index={0} colSpan={2}>
+            <b>Total</b>
+          </Table.Summary.Cell>
+          <Table.Summary.Cell index={1} align="right">
+            <b>Rs. {formatMoney(total)}</b>
+          </Table.Summary.Cell>
+        </Table.Summary.Row>
+      </Table.Summary>
+    );
+  }
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="Company"
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <DatePicker value={asOf} format="DD MMM YYYY" onChange={(d) => d && setAsOf(d)} allowClear={false} />
+      </Space>
+
+      {result && (
+        <>
+          <Typography.Title level={5}>Assets</Typography.Title>
+          <Table
+            rowKey={(r, i) => String(r.account_id ?? `synthetic-${i}`)}
+            columns={columns}
+            dataSource={result.assets}
+            loading={loading}
+            size="small"
+            pagination={false}
+            summary={summaryRow(result.totalAssets)}
+          />
+
+          <Typography.Title level={5} style={{ marginTop: 24 }}>
+            Liabilities
+          </Typography.Title>
+          <Table
+            rowKey={(r, i) => String(r.account_id ?? `synthetic-${i}`)}
+            columns={columns}
+            dataSource={result.liabilities}
+            loading={loading}
+            size="small"
+            pagination={false}
+            summary={summaryRow(result.totalLiabilities)}
+          />
+
+          <Typography.Title level={5} style={{ marginTop: 24 }}>
+            Equity
+          </Typography.Title>
+          <Table
+            rowKey={(r, i) => String(r.account_id ?? `synthetic-${i}`)}
+            columns={columns}
+            dataSource={result.equity}
+            loading={loading}
+            size="small"
+            pagination={false}
+            summary={summaryRow(result.totalEquity)}
+          />
+
+          <div style={{ marginTop: 12 }}>
+            {result.isBalanced ? (
+              <Tag color="green">Balanced - Assets = Liabilities + Equity</Tag>
+            ) : (
+              <Tag color="red">
+                Out of balance - Assets Rs. {formatMoney(result.totalAssets)} vs Liabilities + Equity Rs.{" "}
+                {formatMoney(result.totalLiabilities + result.totalEquity)} (accounting integrity issue - figures shown
+                as-is, not adjusted)
+              </Tag>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ReportsPage() {
   const { companies, customers, vendors } = useCompaniesAndParties();
 
@@ -807,6 +948,7 @@ export function ReportsPage() {
           { key: "outstanding", label: "Outstanding", children: <OutstandingTab companies={companies} /> },
           { key: "general-ledger", label: "General Ledger", children: <GeneralLedgerTab companies={companies} /> },
           { key: "trial-balance", label: "Trial Balance", children: <TrialBalanceTab companies={companies} /> },
+          { key: "balance-sheet", label: "Balance Sheet", children: <BalanceSheetTab companies={companies} /> },
         ]}
       />
     </div>

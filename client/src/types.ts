@@ -535,3 +535,23 @@ export interface ProfitAndLossResult {
   totalExpenses: number;
   netProfit: number;
 }
+
+export interface BalanceSheetRow {
+  /** Null only for the synthesized "Retained Earnings (Current)" row. */
+  account_id: number | null;
+  account_code: string | null;
+  name: string;
+  category: string | null;
+  amount: number;
+}
+
+export interface BalanceSheetResult {
+  asOfDate: string;
+  assets: BalanceSheetRow[];
+  liabilities: BalanceSheetRow[];
+  equity: BalanceSheetRow[];
+  totalAssets: number;
+  totalLiabilities: number;
+  totalEquity: number;
+  isBalanced: boolean;
+}
