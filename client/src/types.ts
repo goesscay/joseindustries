@@ -555,3 +555,27 @@ export interface BalanceSheetResult {
   totalEquity: number;
   isBalanced: boolean;
 }
+
+export interface CashFlowAdjustment {
+  category: string;
+  amount: number;
+}
+
+export interface CashFlowSection {
+  adjustments: CashFlowAdjustment[];
+  total: number;
+}
+
+export interface CashFlowResult {
+  from: string;
+  to: string;
+  netProfit: number;
+  operatingActivities: CashFlowSection;
+  investingActivities: CashFlowSection;
+  financingActivities: CashFlowSection;
+  netChangeInCash: number;
+  openingCashBalance: number;
+  closingCashBalance: number;
+  actualClosingCashBalance: number;
+  reconciles: boolean;
+}

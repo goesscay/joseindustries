@@ -2,7 +2,14 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
-import { AccountingError, getBalanceSheet, getGeneralLedger, getProfitAndLoss, getTrialBalance } from "../services/accounting";
+import {
+  AccountingError,
+  getBalanceSheet,
+  getCashFlowStatement,
+  getGeneralLedger,
+  getProfitAndLoss,
+  getTrialBalance,
+} from "../services/accounting";
 
 // General Ledger / Trial Balance - built entirely from the double-entry
 // ledger (journals + journal_lines + chart_of_accounts), never the old
@@ -96,6 +103,23 @@ accountingReportsRouter.get(
       typeof req.query.as_of === "string" && req.query.as_of ? req.query.as_of : new Date().toISOString().slice(0, 10);
 
     const result = await getBalanceSheet(companyId, asOfDate);
+    res.json(result);
+  })
+);
+
+// Cash Flow Statement (Phase 10, indirect method) - built entirely from
+// journals + journal_lines + chart_of_accounts (see getCashFlowStatement's
+// doc comment), never from accounts.opening_balance or the old
+// journal_entries table. Same company-scoping-by-construction as
+// trial-balance/profit-loss/balance-sheet above.
+accountingReportsRouter.get(
+  "/cash-flow",
+  asyncHandler(async (req, res) => {
+    const companyId = req.query.company_id ? Number(req.query.company_id) : null;
+    if (!companyId) return res.status(400).json({ message: "company_id is required" });
+    const { from, to } = dateRange(req.query);
+
+    const result = await getCashFlowStatement(companyId, from, to);
     res.json(result);
   })
 );

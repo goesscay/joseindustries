@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import {
   BalanceSheetResult,
   BalanceSheetRow,
+  CashFlowResult,
   ChartOfAccount,
   Company,
   Customer,
@@ -930,6 +931,152 @@ function BalanceSheetTab({ companies }: { companies: Company[] }) {
   );
 }
 
+interface CashFlowLine {
+  category: string;
+  amount: number;
+}
+
+// Built entirely from journals + journal_lines + chart_of_accounts via
+// /api/accounting/cash-flow (Phase 10, indirect method) - never from
+// accounts.opening_balance or the old journal_entries table. Operating
+// Activities starts from Net Profit (Phase 8) and adjusts for the period's
+// change in each working-capital account; Investing/Financing are the
+// Fixed Assets / Capital+Loans-Drawings deltas over the same period.
+// "Reconciles" compares the indirect-method net change in cash against the
+// actual Cash+Bank balance change, computed independently - never forced.
+function CashFlowTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<CashFlowResult | null>(null);
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
+
+  async function load() {
+    if (!companyId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<CashFlowResult>(
+        `/accounting/cash-flow?company_id=${companyId}&from=${range[0].format("YYYY-MM-DD")}&to=${range[1].format("YYYY-MM-DD")}`
+      );
+      setResult(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load cash flow statement");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, range]);
+
+  const columns: ColumnsType<CashFlowLine> = [
+    { title: "Item", dataIndex: "category", key: "category" },
+    { title: "Amount", dataIndex: "amount", key: "amount", align: "right", render: (v: number) => `Rs. ${formatMoney(v)}` },
+  ];
+
+  function sectionTable(dataSource: CashFlowLine[], total: number) {
+    return (
+      <Table
+        rowKey={(r, i) => `${r.category}-${i}`}
+        columns={columns}
+        dataSource={dataSource}
+        loading={loading}
+        size="small"
+        pagination={false}
+        summary={() => (
+          <Table.Summary fixed>
+            <Table.Summary.Row>
+              <Table.Summary.Cell index={0}>
+                <b>Total</b>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={1} align="right">
+                <b>Rs. {formatMoney(total)}</b>
+              </Table.Summary.Cell>
+            </Table.Summary.Row>
+          </Table.Summary>
+        )}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="Company"
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+      </Space>
+
+      {result && (
+        <>
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col xs={8}>
+              <Card size="small">
+                <Statistic
+                  title="Net Change in Cash"
+                  value={result.netChangeInCash}
+                  precision={2}
+                  prefix="Rs."
+                  valueStyle={{ color: result.netChangeInCash >= 0 ? "#3f8600" : "#cf1322" }}
+                />
+              </Card>
+            </Col>
+            <Col xs={8}>
+              <Card size="small">
+                <Statistic title="Opening Cash Balance" value={result.openingCashBalance} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={8}>
+              <Card size="small">
+                <Statistic title="Closing Cash Balance" value={result.closingCashBalance} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+          </Row>
+
+          <Typography.Title level={5}>Operating Activities</Typography.Title>
+          {sectionTable(
+            [{ category: "Net Profit", amount: result.netProfit }, ...result.operatingActivities.adjustments],
+            result.operatingActivities.total
+          )}
+
+          <Typography.Title level={5} style={{ marginTop: 24 }}>
+            Investing Activities
+          </Typography.Title>
+          {sectionTable(result.investingActivities.adjustments, result.investingActivities.total)}
+
+          <Typography.Title level={5} style={{ marginTop: 24 }}>
+            Financing Activities
+          </Typography.Title>
+          {sectionTable(result.financingActivities.adjustments, result.financingActivities.total)}
+
+          <div style={{ marginTop: 12 }}>
+            {result.reconciles ? (
+              <Tag color="green">Reconciles - Net Change in Cash matches the actual Cash + Bank balance change</Tag>
+            ) : (
+              <Tag color="red">
+                Does not reconcile - computed Closing Cash Rs. {formatMoney(result.closingCashBalance)} vs actual Rs.{" "}
+                {formatMoney(result.actualClosingCashBalance)} (accounting integrity issue - figures shown as-is, not
+                adjusted)
+              </Tag>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ReportsPage() {
   const { companies, customers, vendors } = useCompaniesAndParties();
 
@@ -949,6 +1096,7 @@ export function ReportsPage() {
           { key: "general-ledger", label: "General Ledger", children: <GeneralLedgerTab companies={companies} /> },
           { key: "trial-balance", label: "Trial Balance", children: <TrialBalanceTab companies={companies} /> },
           { key: "balance-sheet", label: "Balance Sheet", children: <BalanceSheetTab companies={companies} /> },
+          { key: "cash-flow", label: "Cash Flow", children: <CashFlowTab companies={companies} /> },
         ]}
       />
     </div>

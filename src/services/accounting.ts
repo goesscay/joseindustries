@@ -910,17 +910,34 @@ export interface TrialBalanceResult {
  * activity (including one whose activity was fully offset by a reversal)
  * is omitted, per "include all active posting accounts that have
  * accounting activity".
+ *
+ * The date filter lives in the pre-aggregating subquery's own WHERE
+ * clause, not as a secondary LEFT JOIN's ON condition against the
+ * unconditionally-joined journal_lines rows above it - a bug discovered
+ * during Phase 10 (and shared by getProfitAndLoss/getBalanceSheet, fixed
+ * identically in both): joining journal_lines to chart_of_accounts with no
+ * date restriction, then only filtering journals' own columns via a LEFT
+ * JOIN ON clause, does NOT remove the journal_lines row from the result
+ * set or its SUM - it only nulls out journals' columns for that row. A
+ * journal_line dated after asOfDate would silently still contribute to
+ * the sum. Pre-aggregating in a subquery with the date filter in a real
+ * WHERE clause (the same safe shape getAccountBalance/
+ * getAccountOpeningBalance already use) closes this off correctly.
  */
 export async function getTrialBalance(companyId: number, asOfDate: string): Promise<TrialBalanceResult> {
   const [rows] = await pool.query<any[]>(
     `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category, coa.normal_balance,
-            COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) as net
+            COALESCE(agg.total_debit, 0) - COALESCE(agg.total_credit, 0) as net
      FROM chart_of_accounts coa
-     LEFT JOIN journal_lines jl ON jl.account_id = coa.id
-     LEFT JOIN journals j ON j.id = jl.journal_id AND j.journal_date <= ?
+     LEFT JOIN (
+       SELECT jl.account_id, SUM(jl.debit) as total_debit, SUM(jl.credit) as total_credit
+       FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
+       WHERE j.journal_date <= ?
+       GROUP BY jl.account_id
+     ) agg ON agg.account_id = coa.id
      WHERE coa.company_id = ? AND coa.is_active = 1
-     GROUP BY coa.id, coa.account_code, coa.name, coa.account_type, coa.category, coa.normal_balance
-     HAVING net <> 0
+       AND (COALESCE(agg.total_debit, 0) <> 0 OR COALESCE(agg.total_credit, 0) <> 0)
      ORDER BY coa.account_code ASC`,
     [asOfDate, companyId]
   );
@@ -995,17 +1012,32 @@ export interface ProfitAndLossResult {
  * An account with zero net activity in range (including one whose activity
  * was fully offset by a reversal) is omitted, same convention as
  * getTrialBalance.
+ *
+ * The date range filter lives in the pre-aggregating subquery's own WHERE
+ * clause - a bug discovered during Phase 10 (shared by getTrialBalance/
+ * getBalanceSheet, fixed identically in both): joining journal_lines to
+ * chart_of_accounts with no date restriction, then only filtering
+ * journals' own columns via a secondary LEFT JOIN's ON clause, does NOT
+ * remove the journal_lines row from the result set or its SUM - a
+ * journal_line dated outside [from, to] would silently still contribute.
+ * Pre-aggregating in a subquery with the range filter in a real WHERE
+ * clause (the same safe shape getAccountBalance/getAccountOpeningBalance
+ * already use) closes this off correctly.
  */
 export async function getProfitAndLoss(companyId: number, from: string, to: string): Promise<ProfitAndLossResult> {
   const [rows] = await pool.query<any[]>(
     `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category,
-            COALESCE(SUM(jl.debit), 0) as total_debit, COALESCE(SUM(jl.credit), 0) as total_credit
+            COALESCE(agg.total_debit, 0) as total_debit, COALESCE(agg.total_credit, 0) as total_credit
      FROM chart_of_accounts coa
-     LEFT JOIN journal_lines jl ON jl.account_id = coa.id
-     LEFT JOIN journals j ON j.id = jl.journal_id AND j.journal_date BETWEEN ? AND ?
+     LEFT JOIN (
+       SELECT jl.account_id, SUM(jl.debit) as total_debit, SUM(jl.credit) as total_credit
+       FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
+       WHERE j.journal_date BETWEEN ? AND ?
+       GROUP BY jl.account_id
+     ) agg ON agg.account_id = coa.id
      WHERE coa.company_id = ? AND coa.is_active = 1 AND coa.account_type IN ('revenue', 'expense')
-     GROUP BY coa.id, coa.account_code, coa.name, coa.account_type, coa.category
-     HAVING (total_debit <> 0 OR total_credit <> 0)
+       AND (COALESCE(agg.total_debit, 0) <> 0 OR COALESCE(agg.total_credit, 0) <> 0)
      ORDER BY coa.account_code ASC`,
     [from, to, companyId]
   );
@@ -1115,17 +1147,32 @@ export interface BalanceSheetResult {
  * journal or a real accounting-integrity problem breaks the identity, that
  * is surfaced as `isBalanced: false`, exactly like getTrialBalance already
  * does for its own totals.
+ *
+ * The date filter lives in the pre-aggregating subquery's own WHERE
+ * clause - a bug discovered during Phase 10 (shared by getTrialBalance/
+ * getProfitAndLoss, fixed identically in both): joining journal_lines to
+ * chart_of_accounts with no date restriction, then only filtering
+ * journals' own columns via a secondary LEFT JOIN's ON clause, does NOT
+ * remove the journal_lines row from the result set or its SUM - a
+ * journal_line dated after asOfDate would silently still contribute.
+ * Pre-aggregating in a subquery with the date filter in a real WHERE
+ * clause (the same safe shape getAccountBalance/getAccountOpeningBalance
+ * already use) closes this off correctly.
  */
 export async function getBalanceSheet(companyId: number, asOfDate: string): Promise<BalanceSheetResult> {
   const [rows] = await pool.query<any[]>(
     `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category,
-            COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) as net
+            COALESCE(agg.total_debit, 0) - COALESCE(agg.total_credit, 0) as net
      FROM chart_of_accounts coa
-     LEFT JOIN journal_lines jl ON jl.account_id = coa.id
-     LEFT JOIN journals j ON j.id = jl.journal_id AND j.journal_date <= ?
+     LEFT JOIN (
+       SELECT jl.account_id, SUM(jl.debit) as total_debit, SUM(jl.credit) as total_credit
+       FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
+       WHERE j.journal_date <= ?
+       GROUP BY jl.account_id
+     ) agg ON agg.account_id = coa.id
      WHERE coa.company_id = ? AND coa.is_active = 1 AND coa.account_type IN ('asset', 'liability', 'equity')
-     GROUP BY coa.id, coa.account_code, coa.name, coa.account_type, coa.category
-     HAVING net <> 0
+       AND (COALESCE(agg.total_debit, 0) <> 0 OR COALESCE(agg.total_credit, 0) <> 0)
      ORDER BY coa.account_code ASC`,
     [asOfDate, companyId]
   );
@@ -1173,5 +1220,171 @@ export async function getBalanceSheet(companyId: number, asOfDate: string): Prom
     totalLiabilities,
     totalEquity,
     isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+  };
+}
+
+export interface CashFlowAdjustment {
+  category: string;
+  amount: number;
+}
+
+export interface CashFlowSection {
+  adjustments: CashFlowAdjustment[];
+  total: number;
+}
+
+export interface CashFlowResult {
+  from: string;
+  to: string;
+  netProfit: number;
+  operatingActivities: CashFlowSection;
+  investingActivities: CashFlowSection;
+  financingActivities: CashFlowSection;
+  netChangeInCash: number;
+  openingCashBalance: number;
+  closingCashBalance: number;
+  /** Independently computed Cash+Bank balance as of `to`, via
+   * getAccountBalance directly - compared against closingCashBalance
+   * (openingCashBalance + netChangeInCash) to produce `reconciles` below. */
+  actualClosingCashBalance: number;
+  /** True when closingCashBalance matches actualClosingCashBalance - a
+   * defensive integrity check, surfaced honestly, never silently corrected,
+   * same spirit as getTrialBalance's isBalanced and getBalanceSheet's
+   * isBalanced. */
+  reconciles: boolean;
+}
+
+// Operating-activity working-capital accounts: an increase in a current
+// asset consumes cash (sign -1), an increase in a current liability frees
+// cash (sign +1). Cash/Bank themselves are deliberately excluded here -
+// they are the thing being measured, not an adjustment to it. Every
+// category below is one already established by Phase 2/4/6's chart_of_accounts
+// seed (see schema.sql) - nothing invented for this phase.
+const OPERATING_DELTA_CATEGORIES: { category: string; label: string; sign: 1 | -1 }[] = [
+  { category: "Accounts Receivable", label: "Accounts Receivable", sign: -1 },
+  { category: "Inventory", label: "Inventory", sign: -1 },
+  { category: "Other Current Assets", label: "Other Current Assets", sign: -1 },
+  { category: "Input GST", label: "Input GST", sign: -1 },
+  { category: "Accounts Payable", label: "Accounts Payable", sign: 1 },
+  { category: "GST/Tax Payable", label: "GST Payable", sign: 1 },
+  { category: "Output CGST", label: "Output CGST", sign: 1 },
+  { category: "Output SGST", label: "Output SGST", sign: 1 },
+  { category: "Output IGST", label: "Output IGST", sign: 1 },
+  { category: "Other Current Liabilities", label: "Other Current Liabilities", sign: 1 },
+];
+
+// Investing: an increase in Fixed Assets is a cash outflow (sign -1).
+const INVESTING_DELTA_CATEGORIES: { category: string; label: string; sign: 1 | -1 }[] = [
+  { category: "Fixed Assets", label: "Fixed Assets", sign: -1 },
+];
+
+// Financing: an increase in Capital/Loans is a cash inflow (sign +1); an
+// increase in Drawings (debit-normal, reduces equity) is a cash outflow
+// (sign -1). The real, separately-seeded 3200 Retained Earnings account is
+// deliberately excluded from every section here - it has zero postings
+// today, is not a working-capital account, and its Profit & Loss
+// contribution is already fully captured via netProfit above (see Phase 10's
+// audit for the full reasoning).
+const FINANCING_DELTA_CATEGORIES: { category: string; label: string; sign: 1 | -1 }[] = [
+  { category: "Capital", label: "Capital", sign: 1 },
+  { category: "Loans", label: "Loans", sign: 1 },
+  { category: "Drawings", label: "Drawings", sign: -1 },
+];
+
+/**
+ * Period delta for one company account category: getAccountBalance(to) -
+ * getAccountOpeningBalance(from) - reusing both primitives exactly as-is
+ * (Phase 5), so reversal-safety (both sum every journal line regardless of
+ * status) and journal_date semantics come for free rather than being
+ * re-derived a fourth time. Returns 0 (not an error) when the company has
+ * no seeded account for this category - a read-only report should never
+ * fail just because one category happens to be unused, the same way
+ * getProfitAndLoss/getBalanceSheet already omit unused accounts rather
+ * than erroring.
+ */
+async function categoryDelta(companyId: number, category: string, from: string, to: string): Promise<number> {
+  const accountId = await getSystemAccountByCategory(companyId, category);
+  if (!accountId) return 0;
+  const closing = await getAccountBalance(accountId, to);
+  const opening = await getAccountOpeningBalance(accountId, from);
+  return round2(closing - opening);
+}
+
+async function buildSection(
+  companyId: number,
+  entries: { category: string; label: string; sign: 1 | -1 }[],
+  from: string,
+  to: string
+): Promise<CashFlowSection> {
+  const adjustments: CashFlowAdjustment[] = [];
+  for (const entry of entries) {
+    const delta = await categoryDelta(companyId, entry.category, from, to);
+    const amount = round2(delta * entry.sign);
+    if (amount !== 0) adjustments.push({ category: entry.label, amount });
+  }
+  const total = round2(adjustments.reduce((s, a) => s + a.amount, 0));
+  return { adjustments, total };
+}
+
+/**
+ * Indirect-method Cash Flow Statement, built entirely from journals +
+ * journal_lines + chart_of_accounts (never accounts.opening_balance or the
+ * old journal_entries table - same standing exclusion as getBalanceSheet;
+ * both are currently empty for every company, per Phase 10's audit, but
+ * remain architecturally independent regardless).
+ *
+ * Net Cash from Operating = netProfit (getProfitAndLoss over the period)
+ * plus the period's change in every live operating working-capital
+ * account (AR/Inventory/Other Current Assets/Input GST consume cash on
+ * increase; AP/GST liabilities free cash on increase). Net Cash from
+ * Investing/Financing are the corresponding Fixed Assets / Capital+Loans-
+ * Drawings deltas - always Rs. 0 for every company today, since nothing
+ * has ever posted to those accounts (Phase 9's finding, unchanged).
+ *
+ * `reconciles` is a genuine, non-tautological integrity check: the
+ * indirect-method total (netProfit + working-capital deltas) is derived
+ * from an entirely different set of numbers than the *actual* Cash+Bank
+ * balance change over the same period, computed independently via
+ * getAccountBalance/getAccountOpeningBalance on the Cash/Bank accounts
+ * directly - by the fundamental double-entry identity these are
+ * guaranteed to be equal, so any mismatch is a real accounting-integrity
+ * signal, never silently forced to close (same spirit as getTrialBalance's
+ * and getBalanceSheet's own isBalanced checks).
+ */
+export async function getCashFlowStatement(companyId: number, from: string, to: string): Promise<CashFlowResult> {
+  const { netProfit } = await getProfitAndLoss(companyId, from, to);
+
+  const operatingDeltas = await buildSection(companyId, OPERATING_DELTA_CATEGORIES, from, to);
+  const operatingActivities: CashFlowSection = {
+    adjustments: operatingDeltas.adjustments,
+    total: round2(netProfit + operatingDeltas.total),
+  };
+  const investingActivities = await buildSection(companyId, INVESTING_DELTA_CATEGORIES, from, to);
+  const financingActivities = await buildSection(companyId, FINANCING_DELTA_CATEGORIES, from, to);
+
+  const netChangeInCash = round2(operatingActivities.total + investingActivities.total + financingActivities.total);
+
+  const cashId = await getSystemAccountByCategory(companyId, "Cash");
+  const bankId = await getSystemAccountByCategory(companyId, "Bank");
+  const openingCash = round2(
+    (cashId ? await getAccountOpeningBalance(cashId, from) : 0) + (bankId ? await getAccountOpeningBalance(bankId, from) : 0)
+  );
+  const actualClosingCashBalance = round2(
+    (cashId ? await getAccountBalance(cashId, to) : 0) + (bankId ? await getAccountBalance(bankId, to) : 0)
+  );
+  const closingCashBalance = round2(openingCash + netChangeInCash);
+
+  return {
+    from,
+    to,
+    netProfit,
+    operatingActivities,
+    investingActivities,
+    financingActivities,
+    netChangeInCash,
+    openingCashBalance: openingCash,
+    closingCashBalance,
+    actualClosingCashBalance,
+    reconciles: Math.abs(closingCashBalance - actualClosingCashBalance) < 0.01,
   };
 }
