@@ -5,7 +5,8 @@ import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { streamReceiptPdf } from "../services/pdf/receiptPdf";
-import { Company, Customer, DocumentRecord, PaymentMode, Receipt, Role } from "../types";
+import { AccountingError, getJournalBySource, postReceiptJournalTx, reverseJournalTx } from "../services/accounting";
+import { Company, Customer, DocumentRecord, Journal, PaymentMode, Receipt, Role } from "../types";
 
 export const receiptsRouter = Router();
 const MODULE = "sales.receipts";
@@ -96,11 +97,17 @@ async function validatePayload(body: any, userId: number, userRole: Role) {
   }
 
   if (account_id) {
-    const [accountRows] = await pool.query<any[]>("SELECT id, company_id FROM accounts WHERE id = ?", [account_id]);
+    const [accountRows] = await pool.query<any[]>(
+      "SELECT id, company_id, is_active FROM accounts WHERE id = ?",
+      [account_id]
+    );
     const account = accountRows[0];
     if (!account) return { error: "Account not found" };
     if (account.company_id !== Number(company_id)) {
       return { error: "Selected account does not belong to this company" };
+    }
+    if (!account.is_active) {
+      return { error: "Selected account is inactive" };
     }
     if (!(await canAccessAccount(userId, userRole, Number(account_id)))) {
       return { error: "You don't have access to this account" };
@@ -110,6 +117,10 @@ async function validatePayload(body: any, userId: number, userRole: Role) {
   return { company, customer, invoice };
 }
 
+// Creating a receipt and posting its accounting journal must succeed or
+// fail together - both writes share one connection/transaction so a
+// journal-posting failure (e.g. no Accounts Receivable account configured
+// for the company) rolls back the receipt instead of leaving it unposted.
 receiptsRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
@@ -122,78 +133,181 @@ receiptsRouter.post(
 
     const { docNumber, financialYear } = await getNextDocNumber("receipt", company!.code, new Date(received_date));
 
-    const [insertResult] = await pool.query<any>(
-      `INSERT INTO receipts
-         (receipt_no, financial_year, company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        docNumber,
-        financialYear,
-        req.body.company_id,
-        customer_id,
-        tax_invoice_id || null,
-        account_id || null,
-        amount,
-        payment_mode,
-        reference_no || null,
-        received_date,
-        notes || null,
-        req.user!.sub,
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const created = await findById(insertResult.insertId);
-    res.status(201).json({ receipt: created });
+      const [insertResult] = await conn.query<any>(
+        `INSERT INTO receipts
+           (receipt_no, financial_year, company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          docNumber,
+          financialYear,
+          req.body.company_id,
+          customer_id,
+          tax_invoice_id || null,
+          account_id || null,
+          amount,
+          payment_mode,
+          reference_no || null,
+          received_date,
+          notes || null,
+          req.user!.sub,
+        ]
+      );
+      const receiptId = insertResult.insertId;
+
+      // No account_id means there's no cash-movement account to post
+      // against (the field is optional, same as before this phase) - the
+      // receipt is still recorded as a business document, just left
+      // unposted rather than guessing an account.
+      let journal: Journal | undefined;
+      if (account_id) {
+        journal = await postReceiptJournalTx(conn, {
+          companyId: Number(req.body.company_id),
+          accountId: Number(account_id),
+          amount: Number(amount),
+          receiptId,
+          receiptNo: docNumber,
+          receivedDate: received_date,
+          createdBy: req.user!.sub,
+        });
+      }
+
+      await conn.commit();
+      const created = await findById(receiptId);
+      res.status(201).json({ receipt: created, journal: journal ? { id: journal.id, status: journal.status } : null });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Receipt could not be recorded: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 
+// A posted journal is never edited in place. Instead: reverse whatever
+// journal currently exists for this receipt (if any) and post a fresh one
+// reflecting the corrected figures - both steps, plus the receipt update
+// itself, share one transaction. The receipt row is locked FOR UPDATE for
+// the duration so two concurrent edits of the same receipt can't race each
+// other into posting/reversing journals out of order.
 receiptsRouter.put(
   "/:id",
   requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const existing = await findById(id);
-    if (!existing) return res.status(404).json({ message: "Receipt not found" });
-
     const result = await validatePayload(req.body, req.user!.sub, req.user!.role);
     if ("error" in result) return res.status(400).json({ message: result.error });
 
     const { company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes } =
       req.body;
 
-    await pool.query(
-      `UPDATE receipts SET
-         company_id = ?, customer_id = ?, tax_invoice_id = ?, account_id = ?, amount = ?, payment_mode = ?,
-         reference_no = ?, received_date = ?, notes = ?
-       WHERE id = ?`,
-      [
-        company_id,
-        customer_id,
-        tax_invoice_id || null,
-        account_id || null,
-        amount,
-        payment_mode,
-        reference_no || null,
-        received_date,
-        notes || null,
-        id,
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const updated = await findById(id);
-    res.json({ receipt: updated });
+      const [existingRows] = await conn.query<any[]>("SELECT * FROM receipts WHERE id = ? FOR UPDATE", [id]);
+      const existing = existingRows[0] as Receipt | undefined;
+      if (!existing) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Receipt not found" });
+      }
+
+      await conn.query(
+        `UPDATE receipts SET
+           company_id = ?, customer_id = ?, tax_invoice_id = ?, account_id = ?, amount = ?, payment_mode = ?,
+           reference_no = ?, received_date = ?, notes = ?
+         WHERE id = ?`,
+        [
+          company_id,
+          customer_id,
+          tax_invoice_id || null,
+          account_id || null,
+          amount,
+          payment_mode,
+          reference_no || null,
+          received_date,
+          notes || null,
+          id,
+        ]
+      );
+
+      const priorJournal = await getJournalBySource("receipt", id);
+      if (priorJournal) {
+        await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+      }
+
+      let journal: Journal | undefined;
+      if (account_id) {
+        journal = await postReceiptJournalTx(conn, {
+          companyId: Number(company_id),
+          accountId: Number(account_id),
+          amount: Number(amount),
+          receiptId: id,
+          receiptNo: existing.receipt_no,
+          receivedDate: received_date,
+          createdBy: req.user!.sub,
+        });
+      }
+
+      await conn.commit();
+      const updated = await findById(id);
+      res.json({ receipt: updated, journal: journal ? { id: journal.id, status: journal.status } : null });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Receipt could not be updated: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 
+// The existing business rule already permits permanently deleting a
+// receipt (no soft-delete concept in this app) - preserved as-is. What's
+// new is that a posted journal is never left orphaned: if one exists for
+// this receipt, it's reversed (never deleted - the reversal itself is the
+// audit trail) before the receipt row is removed, and both happen in one
+// transaction.
 receiptsRouter.delete(
   "/:id",
   requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const existing = await findById(id);
-    if (!existing) return res.status(404).json({ message: "Receipt not found" });
-    await pool.query("DELETE FROM receipts WHERE id = ?", [id]);
-    res.json({ message: "Receipt deleted" });
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [existingRows] = await conn.query<any[]>("SELECT id FROM receipts WHERE id = ? FOR UPDATE", [id]);
+      if (!existingRows[0]) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Receipt not found" });
+      }
+
+      const priorJournal = await getJournalBySource("receipt", id);
+      if (priorJournal) {
+        await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+      }
+
+      await conn.query("DELETE FROM receipts WHERE id = ?", [id]);
+      await conn.commit();
+      res.json({ message: "Receipt deleted" });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Receipt could not be deleted: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 

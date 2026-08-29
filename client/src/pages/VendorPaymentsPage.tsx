@@ -112,11 +112,11 @@ export function VendorPaymentsPage() {
     try {
       const payload = { ...values, paid_date: values.paid_date.format("YYYY-MM-DD") };
       if (editing) {
-        await api.put(`/vendor-payments/${editing.id}`, payload);
-        message.success("Vendor payment updated");
+        const { journal } = await api.put<{ journal: { id: number } | null }>(`/vendor-payments/${editing.id}`, payload);
+        message.success(journal ? `Vendor payment updated (Journal #${journal.id} posted)` : "Vendor payment updated");
       } else {
-        await api.post("/vendor-payments", payload);
-        message.success("Vendor payment created");
+        const { journal } = await api.post<{ journal: { id: number } | null }>("/vendor-payments", payload);
+        message.success(journal ? `Vendor payment created (Journal #${journal.id} posted)` : "Vendor payment created");
       }
       setModalOpen(false);
       load();

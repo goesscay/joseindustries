@@ -131,11 +131,11 @@ export function ReceiptsPage() {
     try {
       const payload = { ...values, received_date: values.received_date.format("YYYY-MM-DD") };
       if (editing) {
-        await api.put(`/receipts/${editing.id}`, payload);
-        message.success("Receipt updated");
+        const { journal } = await api.put<{ journal: { id: number } | null }>(`/receipts/${editing.id}`, payload);
+        message.success(journal ? `Receipt updated (Journal #${journal.id} posted)` : "Receipt updated");
       } else {
-        await api.post("/receipts", payload);
-        message.success("Receipt created");
+        const { journal } = await api.post<{ journal: { id: number } | null }>("/receipts", payload);
+        message.success(journal ? `Receipt created (Journal #${journal.id} posted)` : "Receipt created");
       }
       setModalOpen(false);
       load();

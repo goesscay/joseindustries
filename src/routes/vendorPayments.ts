@@ -4,7 +4,8 @@ import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
-import { Company, Expense, PaymentMode, Role, Vendor, VendorPayment } from "../types";
+import { AccountingError, getJournalBySource, postVendorPaymentJournalTx, reverseJournalTx } from "../services/accounting";
+import { Company, Expense, Journal, PaymentMode, Role, Vendor, VendorPayment } from "../types";
 
 export const vendorPaymentsRouter = Router();
 const MODULE = "expenses.vendor_payments";
@@ -92,11 +93,17 @@ async function validatePayload(body: any, userId: number, userRole: Role) {
   }
 
   if (account_id) {
-    const [accountRows] = await pool.query<any[]>("SELECT id, company_id FROM accounts WHERE id = ?", [account_id]);
+    const [accountRows] = await pool.query<any[]>(
+      "SELECT id, company_id, is_active FROM accounts WHERE id = ?",
+      [account_id]
+    );
     const account = accountRows[0];
     if (!account) return { error: "Account not found" };
     if (account.company_id !== Number(company_id)) {
       return { error: "Selected account does not belong to this company" };
+    }
+    if (!account.is_active) {
+      return { error: "Selected account is inactive" };
     }
     if (!(await canAccessAccount(userId, userRole, Number(account_id)))) {
       return { error: "You don't have access to this account" };
@@ -106,6 +113,9 @@ async function validatePayload(body: any, userId: number, userRole: Role) {
   return { company, vendor, expense };
 }
 
+// Creating a vendor payment and posting its accounting journal must
+// succeed or fail together - see the identical reasoning on receipts.ts's
+// POST handler.
 vendorPaymentsRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
@@ -118,76 +128,176 @@ vendorPaymentsRouter.post(
 
     const { docNumber, financialYear } = await getNextDocNumber("vendor_payment", company!.code, new Date(paid_date));
 
-    const [insertResult] = await pool.query<any>(
-      `INSERT INTO vendor_payments
-         (payment_no, financial_year, company_id, vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        docNumber,
-        financialYear,
-        req.body.company_id,
-        vendor_id,
-        expense_id || null,
-        account_id || null,
-        amount,
-        payment_mode,
-        reference_no || null,
-        paid_date,
-        notes || null,
-        req.user!.sub,
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const created = await findById(insertResult.insertId);
-    res.status(201).json({ payment: created });
+      const [insertResult] = await conn.query<any>(
+        `INSERT INTO vendor_payments
+           (payment_no, financial_year, company_id, vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          docNumber,
+          financialYear,
+          req.body.company_id,
+          vendor_id,
+          expense_id || null,
+          account_id || null,
+          amount,
+          payment_mode,
+          reference_no || null,
+          paid_date,
+          notes || null,
+          req.user!.sub,
+        ]
+      );
+      const paymentId = insertResult.insertId;
+
+      // No account_id means there's no cash-movement account to post
+      // against (the field is optional, same as before this phase) - the
+      // payment is still recorded as a business document, just left
+      // unposted rather than guessing an account.
+      let journal: Journal | undefined;
+      if (account_id) {
+        journal = await postVendorPaymentJournalTx(conn, {
+          companyId: Number(req.body.company_id),
+          accountId: Number(account_id),
+          amount: Number(amount),
+          paymentId,
+          paymentNo: docNumber,
+          paidDate: paid_date,
+          createdBy: req.user!.sub,
+        });
+      }
+
+      await conn.commit();
+      const created = await findById(paymentId);
+      res.status(201).json({ payment: created, journal: journal ? { id: journal.id, status: journal.status } : null });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Vendor payment could not be recorded: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 
+// A posted journal is never edited in place - reverse whatever journal
+// currently exists for this payment (if any) and post a fresh one
+// reflecting the corrected figures. See receipts.ts's PUT handler for the
+// identical reasoning (locking, atomicity, reverse-then-recreate).
 vendorPaymentsRouter.put(
   "/:id",
   requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const existing = await findById(id);
-    if (!existing) return res.status(404).json({ message: "Vendor payment not found" });
-
     const result = await validatePayload(req.body, req.user!.sub, req.user!.role);
     if ("error" in result) return res.status(400).json({ message: result.error });
 
     const { vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
 
-    await pool.query(
-      `UPDATE vendor_payments SET
-         company_id = ?, vendor_id = ?, expense_id = ?, account_id = ?, amount = ?, payment_mode = ?,
-         reference_no = ?, paid_date = ?, notes = ?
-       WHERE id = ?`,
-      [
-        req.body.company_id,
-        vendor_id,
-        expense_id || null,
-        account_id || null,
-        amount,
-        payment_mode,
-        reference_no || null,
-        paid_date,
-        notes || null,
-        id,
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const updated = await findById(id);
-    res.json({ payment: updated });
+      const [existingRows] = await conn.query<any[]>("SELECT * FROM vendor_payments WHERE id = ? FOR UPDATE", [id]);
+      const existing = existingRows[0] as VendorPayment | undefined;
+      if (!existing) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Vendor payment not found" });
+      }
+
+      await conn.query(
+        `UPDATE vendor_payments SET
+           company_id = ?, vendor_id = ?, expense_id = ?, account_id = ?, amount = ?, payment_mode = ?,
+           reference_no = ?, paid_date = ?, notes = ?
+         WHERE id = ?`,
+        [
+          req.body.company_id,
+          vendor_id,
+          expense_id || null,
+          account_id || null,
+          amount,
+          payment_mode,
+          reference_no || null,
+          paid_date,
+          notes || null,
+          id,
+        ]
+      );
+
+      const priorJournal = await getJournalBySource("vendor_payment", id);
+      if (priorJournal) {
+        await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+      }
+
+      let journal: Journal | undefined;
+      if (account_id) {
+        journal = await postVendorPaymentJournalTx(conn, {
+          companyId: Number(req.body.company_id),
+          accountId: Number(account_id),
+          amount: Number(amount),
+          paymentId: id,
+          paymentNo: existing.payment_no,
+          paidDate: paid_date,
+          createdBy: req.user!.sub,
+        });
+      }
+
+      await conn.commit();
+      const updated = await findById(id);
+      res.json({ payment: updated, journal: journal ? { id: journal.id, status: journal.status } : null });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Vendor payment could not be updated: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
 
+// The existing business rule already permits permanently deleting a
+// vendor payment - preserved as-is. What's new is that a posted journal
+// is never left orphaned: it's reversed (never deleted) before the
+// payment row is removed, both in one transaction. See receipts.ts's
+// DELETE handler for the identical reasoning.
 vendorPaymentsRouter.delete(
   "/:id",
   requireModuleAccess(MODULE, "delete"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const existing = await findById(id);
-    if (!existing) return res.status(404).json({ message: "Vendor payment not found" });
-    await pool.query("DELETE FROM vendor_payments WHERE id = ?", [id]);
-    res.json({ message: "Vendor payment deleted" });
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [existingRows] = await conn.query<any[]>("SELECT id FROM vendor_payments WHERE id = ? FOR UPDATE", [id]);
+      if (!existingRows[0]) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Vendor payment not found" });
+      }
+
+      const priorJournal = await getJournalBySource("vendor_payment", id);
+      if (priorJournal) {
+        await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+      }
+
+      await conn.query("DELETE FROM vendor_payments WHERE id = ?", [id]);
+      await conn.commit();
+      res.json({ message: "Vendor payment deleted" });
+    } catch (err) {
+      await conn.rollback();
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Vendor payment could not be deleted: ${err.message}` });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   })
 );
