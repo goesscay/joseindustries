@@ -239,12 +239,12 @@ function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors
 }
 
 // Built entirely from the double-entry ledger (journals + journal_lines +
-// chart_of_accounts) via /api/accounting/profit-loss - not from the old
-// documents/expenses-based query the legacy /api/reports/profit-loss route
-// used. Income = Credit - Debit on revenue accounts, Expense = Debit -
-// Credit on expense accounts (Phase 8) - GST/Accounts Receivable/Accounts
-// Payable/Bank/Cash never appear, since they're asset/liability accounts
-// excluded by the backend query itself, not by anything filtered here.
+// chart_of_accounts) via /api/accounting/profit-loss (Phase 8) - never from
+// documents/expenses directly. Income = Credit - Debit on revenue accounts,
+// Expense = Debit - Credit on expense accounts - GST/Accounts Receivable/
+// Accounts Payable/Bank/Cash never appear, since they're asset/liability
+// accounts excluded by the backend query itself, not by anything filtered
+// here.
 function ProfitLossTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);

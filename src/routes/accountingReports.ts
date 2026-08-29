@@ -66,12 +66,11 @@ accountingReportsRouter.get(
 );
 
 // Profit & Loss (Phase 8) - built entirely from journals + journal_lines +
-// chart_of_accounts (see getProfitAndLoss's doc comment), never the legacy
-// documents/expenses-based query in reports.ts's own /profit-loss route.
-// Same company-scoping-by-construction as trial-balance above - the only
-// scoping input is company_id itself, used directly in the query's WHERE
-// clause, so there's no account_id parameter for a cross-company mismatch
-// to even be possible.
+// chart_of_accounts (see getProfitAndLoss's doc comment), never from
+// documents/expenses directly. Same company-scoping-by-construction as
+// trial-balance above - the only scoping input is company_id itself, used
+// directly in the query's WHERE clause, so there's no account_id parameter
+// for a cross-company mismatch to even be possible.
 accountingReportsRouter.get(
   "/profit-loss",
   asyncHandler(async (req, res) => {

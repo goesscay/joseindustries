@@ -230,41 +230,6 @@ reportsRouter.get(
   })
 );
 
-// ---- Profit & Loss: Sales (Tax Invoices, excluding GST - it isn't income)
-// minus Expenses (excluding input GST), by category. ----
-reportsRouter.get(
-  "/profit-loss",
-  asyncHandler(async (req, res) => {
-    const companyId = req.query.company_id ? Number(req.query.company_id) : null;
-    const { from, to } = dateRange(req.query);
-    const companyClause = companyId ? "AND company_id = ?" : "";
-    const companyParam = companyId ? [companyId] : [];
-
-    const [revenueRows] = await pool.query<any[]>(
-      `SELECT COALESCE(SUM(grand_total - tax_total), 0) as revenue
-       FROM documents
-       WHERE doc_type = 'tax_invoice' AND status != 'cancelled' ${companyClause} AND issue_date BETWEEN ? AND ?`,
-      [...companyParam, from, to]
-    );
-
-    const [expenseRows] = await pool.query<any[]>(
-      `SELECT COALESCE(cat.name, 'Uncategorized') as category, COALESCE(SUM(e.amount), 0) as total
-       FROM expenses e
-       LEFT JOIN expense_categories cat ON cat.id = e.category_id
-       WHERE 1=1 ${companyId ? "AND e.company_id = ?" : ""} AND e.expense_date BETWEEN ? AND ?
-       GROUP BY COALESCE(cat.name, 'Uncategorized')
-       ORDER BY total DESC`,
-      [...companyParam, from, to]
-    );
-
-    const revenue = Number(revenueRows[0].revenue);
-    const expensesByCategory = expenseRows.map((r) => ({ category: r.category, amount: Number(r.total) }));
-    const totalExpenses = expensesByCategory.reduce((s, r) => s + r.amount, 0);
-
-    res.json({ revenue, expensesByCategory, totalExpenses, netProfit: revenue - totalExpenses });
-  })
-);
-
 // ---- GST Summary: Output GST (from Tax Invoices) vs Input GST (from
 // Expenses) -> net payable. Input GST has no CGST/SGST/IGST split in the
 // simple Expenses model, so it's shown as one figure. ----
