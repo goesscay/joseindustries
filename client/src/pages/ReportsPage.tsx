@@ -1,9 +1,19 @@
-import { useEffect, useState } from "react";
-import { Tabs, Select, DatePicker, Radio, Table, Typography, Space, Button, message, Statistic, Row, Col, Card } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { Tabs, Select, DatePicker, Radio, Table, Typography, Space, Button, message, Statistic, Row, Col, Card, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { Dayjs } from "dayjs";
 import { api } from "../api/client";
-import { Company, Customer, Vendor } from "../types";
+import {
+  ChartOfAccount,
+  Company,
+  Customer,
+  GeneralLedgerEntry,
+  GeneralLedgerResult,
+  LedgerAccountType,
+  TrialBalanceResult,
+  TrialBalanceRow,
+  Vendor,
+} from "../types";
 
 const { RangePicker } = DatePicker;
 
@@ -482,6 +492,255 @@ function OutstandingTab({ companies }: { companies: Company[] }) {
   );
 }
 
+const ACCOUNT_TYPE_LABELS: Record<LedgerAccountType, string> = {
+  asset: "Asset",
+  liability: "Liability",
+  equity: "Equity",
+  revenue: "Revenue",
+  expense: "Expense",
+};
+
+const GL_SOURCE_LABELS: Record<string, string> = {
+  receipt: "Receipt",
+  vendor_payment: "Vendor Payment",
+  tax_invoice: "Tax Invoice",
+};
+
+// Built from the double-entry ledger (journals + journal_lines +
+// chart_of_accounts) via /api/accounting/general-ledger - not from the
+// ad-hoc source-table queries the other tabs on this page use. Only
+// transactions already posted to that ledger (Phase 3 receipts/vendor
+// payments, Phase 4 tax invoices) appear here - historical documents from
+// before those phases were wired in do not, by design (no backfill).
+function GeneralLedgerTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [accounts, setAccounts] = useState<ChartOfAccount[]>([]);
+  const [typeFilter, setTypeFilter] = useState<LedgerAccountType | undefined>();
+  const [accountId, setAccountId] = useState<number | undefined>();
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("month"), dayjs()]);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<GeneralLedgerResult | null>(null);
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    api
+      .get<{ data: ChartOfAccount[] }>(`/chart-of-accounts?company_id=${companyId}`)
+      .then((res) => {
+        setAccounts(res.data);
+        setAccountId(undefined);
+        setResult(null);
+      })
+      .catch(() => {});
+  }, [companyId]);
+
+  const filteredAccounts = useMemo(
+    () => (typeFilter ? accounts.filter((a) => a.account_type === typeFilter) : accounts),
+    [accounts, typeFilter]
+  );
+
+  async function load() {
+    if (!companyId || !accountId) return;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        company_id: String(companyId),
+        account_id: String(accountId),
+        from: range[0].format("YYYY-MM-DD"),
+        to: range[1].format("YYYY-MM-DD"),
+      });
+      const res = await api.get<GeneralLedgerResult>(`/accounting/general-ledger?${params.toString()}`);
+      setResult(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load general ledger");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, accountId, range]);
+
+  const columns: ColumnsType<GeneralLedgerEntry> = [
+    { title: "Date", dataIndex: "journal_date", key: "journal_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
+    { title: "Reference", dataIndex: "reference", key: "reference", render: (v: string | null) => v || "-" },
+    {
+      title: "Source",
+      dataIndex: "source_type",
+      key: "source_type",
+      render: (v: string | null) => (v ? GL_SOURCE_LABELS[v] ?? v : "Manual"),
+    },
+    { title: "Description", dataIndex: "description", key: "description", render: (v: string | null) => v || "-" },
+    { title: "Debit", dataIndex: "debit", key: "debit", align: "right", render: (v: number) => (v ? formatMoney(v) : "") },
+    { title: "Credit", dataIndex: "credit", key: "credit", align: "right", render: (v: number) => (v ? formatMoney(v) : "") },
+    {
+      title: "Balance",
+      dataIndex: "running_balance",
+      key: "running_balance",
+      align: "right",
+      render: (v: number) => <b>{formatMoney(v)}</b>,
+    },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="Company"
+          style={{ width: 180 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <Select
+          placeholder="All Account Types"
+          allowClear
+          style={{ width: 170 }}
+          value={typeFilter}
+          options={(Object.keys(ACCOUNT_TYPE_LABELS) as LedgerAccountType[]).map((t) => ({
+            value: t,
+            label: ACCOUNT_TYPE_LABELS[t],
+          }))}
+          onChange={setTypeFilter}
+        />
+        <Select
+          placeholder="Select account"
+          showSearch
+          style={{ width: 280 }}
+          value={accountId}
+          options={filteredAccounts.map((a) => ({ value: a.id, label: `${a.account_code} - ${a.name}` }))}
+          filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+          onChange={setAccountId}
+        />
+        <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+      </Space>
+
+      {!accountId && <Typography.Text type="secondary">Select an account to view its General Ledger.</Typography.Text>}
+
+      {result && (
+        <>
+          <Space size="large" style={{ marginBottom: 12 }} wrap>
+            <Typography.Text>Opening Balance: Rs. {formatMoney(result.openingBalance)}</Typography.Text>
+            <Typography.Text strong>Closing Balance: Rs. {formatMoney(result.closingBalance)}</Typography.Text>
+          </Space>
+          <Table
+            rowKey={(_, i) => String(i)}
+            columns={columns}
+            dataSource={result.entries}
+            loading={loading}
+            size="small"
+            pagination={false}
+            scroll={{ x: 800 }}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+// Built entirely from journals + journal_lines + chart_of_accounts via
+// /api/accounting/trial-balance - never from receipts/vendor_payments/
+// expenses/documents/accounts.balance/the old journal_entries table.
+function TrialBalanceTab({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState<number | undefined>();
+  const [asOf, setAsOf] = useState<Dayjs>(dayjs());
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<TrialBalanceResult | null>(null);
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
+
+  async function load() {
+    if (!companyId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<TrialBalanceResult>(
+        `/accounting/trial-balance?company_id=${companyId}&as_of=${asOf.format("YYYY-MM-DD")}`
+      );
+      setResult(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load trial balance");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, asOf]);
+
+  const columns: ColumnsType<TrialBalanceRow> = [
+    { title: "Account Code", dataIndex: "account_code", key: "account_code", width: 110 },
+    { title: "Account Name", dataIndex: "name", key: "name" },
+    { title: "Type", dataIndex: "account_type", key: "account_type", render: (t: LedgerAccountType) => ACCOUNT_TYPE_LABELS[t] },
+    { title: "Debit", dataIndex: "debit", key: "debit", align: "right", render: (v: number) => (v ? formatMoney(v) : "") },
+    { title: "Credit", dataIndex: "credit", key: "credit", align: "right", render: (v: number) => (v ? formatMoney(v) : "") },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="Company"
+          style={{ width: 200 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <DatePicker value={asOf} format="DD MMM YYYY" onChange={(d) => d && setAsOf(d)} allowClear={false} />
+      </Space>
+
+      {result && (
+        <>
+          <Table
+            rowKey="account_id"
+            columns={columns}
+            dataSource={result.rows}
+            loading={loading}
+            size="small"
+            pagination={false}
+            scroll={{ x: 600 }}
+            summary={() => (
+              <Table.Summary fixed>
+                <Table.Summary.Row>
+                  <Table.Summary.Cell index={0} colSpan={3}>
+                    <b>Total</b>
+                  </Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="right">
+                    <b>{formatMoney(result.totalDebit)}</b>
+                  </Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} align="right">
+                    <b>{formatMoney(result.totalCredit)}</b>
+                  </Table.Summary.Cell>
+                </Table.Summary.Row>
+              </Table.Summary>
+            )}
+          />
+          <div style={{ marginTop: 12 }}>
+            {result.isBalanced ? (
+              <Tag color="green">Balanced - Total Debit = Total Credit</Tag>
+            ) : (
+              <Tag color="red">
+                Out of balance - Debit Rs. {formatMoney(result.totalDebit)} vs Credit Rs. {formatMoney(result.totalCredit)}{" "}
+                (accounting integrity issue - figures shown as-is, not adjusted)
+              </Tag>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ReportsPage() {
   const { companies, customers, vendors } = useCompaniesAndParties();
 
@@ -498,6 +757,8 @@ export function ReportsPage() {
           { key: "profit-loss", label: "Profit & Loss", children: <ProfitLossTab companies={companies} /> },
           { key: "gst-summary", label: "GST Summary", children: <GstSummaryTab companies={companies} /> },
           { key: "outstanding", label: "Outstanding", children: <OutstandingTab companies={companies} /> },
+          { key: "general-ledger", label: "General Ledger", children: <GeneralLedgerTab companies={companies} /> },
+          { key: "trial-balance", label: "Trial Balance", children: <TrialBalanceTab companies={companies} /> },
         ]}
       />
     </div>

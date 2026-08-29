@@ -758,3 +758,12 @@ JOIN chart_of_accounts parent
   ON parent.company_id = child.company_id AND parent.account_code = '2100'
 SET child.parent_id = parent.id
 WHERE child.account_code IN ('2121', '2122', '2123');
+
+-- Phase 5: General Ledger / Trial Balance filter and join heavily on
+-- (company_id, journal_date, status) and (source_type, source_id) - neither
+-- had a dedicated index before (journal_lines.account_id already has one
+-- via its FK constraint, which is what these two reports' account-scoped
+-- queries lean on). Additive and idempotent, like every other schema
+-- change in this file.
+ALTER TABLE journals ADD INDEX IF NOT EXISTS idx_journals_company_date (company_id, journal_date);
+ALTER TABLE journals ADD INDEX IF NOT EXISTS idx_journals_source (source_type, source_id);

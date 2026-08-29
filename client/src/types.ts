@@ -359,3 +359,68 @@ export interface LedgerEntry {
   particulars: string;
   running_balance: number;
 }
+
+// ---- Phase 5: Chart of Accounts / General Ledger / Trial Balance -
+// mirrors src/types.ts's ChartOfAccount/Journal shapes on the server, same
+// hand-kept-in-sync convention as every other client/server-shared type
+// in this file. ----
+
+export type LedgerAccountType = "asset" | "liability" | "equity" | "revenue" | "expense";
+export type NormalBalance = "debit" | "credit";
+
+export interface ChartOfAccount {
+  id: number;
+  company_id: number;
+  parent_id: number | null;
+  account_code: string;
+  name: string;
+  account_type: LedgerAccountType;
+  category: string | null;
+  normal_balance: NormalBalance;
+  description: string | null;
+  is_active: boolean | number;
+  is_system: boolean | number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GeneralLedgerEntry {
+  journal_id: number;
+  journal_date: string;
+  reference: string | null;
+  source_type: string | null;
+  source_id: number | null;
+  description: string | null;
+  status: "posted" | "reversed";
+  debit: number;
+  credit: number;
+  running_balance: number;
+}
+
+export interface GeneralLedgerResult {
+  account: ChartOfAccount;
+  from: string;
+  to: string;
+  openingBalance: number;
+  entries: GeneralLedgerEntry[];
+  closingBalance: number;
+}
+
+export interface TrialBalanceRow {
+  account_id: number;
+  account_code: string;
+  name: string;
+  account_type: LedgerAccountType;
+  category: string | null;
+  normal_balance: NormalBalance;
+  debit: number;
+  credit: number;
+}
+
+export interface TrialBalanceResult {
+  asOfDate: string;
+  rows: TrialBalanceRow[];
+  totalDebit: number;
+  totalCredit: number;
+  isBalanced: boolean;
+}

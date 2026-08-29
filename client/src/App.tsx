@@ -19,6 +19,7 @@ import { ExpenseCategoriesPage } from "./pages/ExpenseCategoriesPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { VendorPaymentsPage } from "./pages/VendorPaymentsPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { TaxRatesPage } from "./pages/TaxRatesPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
@@ -74,6 +75,14 @@ function App() {
             }
           />
           <Route path="/accounts" element={<ModuleGate module="banking.accounts"><AccountsPage /></ModuleGate>} />
+          <Route
+            path="/accounting/chart-of-accounts"
+            element={
+              <ModuleGate module="accounting.chart_of_accounts">
+                <ChartOfAccountsPage />
+              </ModuleGate>
+            }
+          />
           <Route path="/reports" element={<ModuleGate module="reports.reports"><ReportsPage /></ModuleGate>} />
           <Route path="/settings/tax-rates" element={<ModuleGate module="settings.tax_gst"><TaxRatesPage /></ModuleGate>} />
           <Route

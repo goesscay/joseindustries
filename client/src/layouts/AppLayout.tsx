@@ -47,6 +47,7 @@ import {
   LineChartOutlined,
   PieChartOutlined,
   DatabaseOutlined,
+  BookOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { ROUTE_MODULE } from "../constants/routeModules";
@@ -150,6 +151,14 @@ export function AppLayout() {
               ],
             },
             {
+              key: "group-accounting",
+              icon: <BookOutlined />,
+              label: "Accounting",
+              children: [
+                { key: "/accounting/chart-of-accounts", icon: <BookOutlined />, label: "Chart of Accounts" },
+              ],
+            },
+            {
               key: "group-reports",
               icon: <BarChartOutlined />,
               label: "Reports",
@@ -162,7 +171,12 @@ export function AppLayout() {
                 { key: "/reports/tax-gst", icon: <PercentageOutlined />, label: comingSoonLabel("Tax & GST"), disabled: true },
                 { key: "/reports/banking", icon: <CreditCardOutlined />, label: comingSoonLabel("Banking"), disabled: true },
                 { key: "/reports/inventory", icon: <DatabaseOutlined />, label: comingSoonLabel("Inventory"), disabled: true },
-                { key: "/reports/financial", icon: <BarChartOutlined />, label: comingSoonLabel("Financial Reports"), disabled: true },
+                // Financial Reports is the one enabled item in this group -
+                // it's a real destination (the existing /reports page,
+                // which now also has General Ledger + Trial Balance tabs),
+                // not a placeholder. The other 8 siblings above stay
+                // disabled - they're unimplemented, per Phase 5's scope.
+                { key: "/reports", icon: <BarChartOutlined />, label: "Financial Reports" },
               ],
             },
             {

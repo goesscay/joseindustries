@@ -1,6 +1,15 @@
 import { PoolConnection } from "mysql2/promise";
 import { pool } from "../config/db";
-import { ChartOfAccount, CreateJournalInput, Journal, JournalLine, JournalLineInput } from "../types";
+import {
+  ChartOfAccount,
+  CreateJournalInput,
+  Journal,
+  JournalLine,
+  JournalLineInput,
+  JournalStatus,
+  LedgerAccountType,
+  NormalBalance,
+} from "../types";
 
 /** Thrown for any accounting-rule violation (unbalanced journal, negative
  * amount, cross-company account, ...). Routes catch this and respond 400
@@ -510,13 +519,37 @@ export async function postTaxInvoiceJournalTx(conn: PoolConnection, input: PostT
   });
 }
 
+// ---- A note on `journals.status` and arithmetic -----------------------
+// A reversal is an OFFSETTING entry, not a retroactive void: posted
+// journals are immutable, so "correcting" one means posting a brand new
+// journal with every line's debit/credit swapped, and only then flipping
+// the ORIGINAL's status to 'reversed' as a superseded-marker. The
+// original's lines are still real, historical amounts - they happened.
+// That means original + its reversal must BOTH be summed for any balance
+// calculation to net to exactly zero (or, when a reversal is immediately
+// followed by a fresh corrected journal - exactly how edits work in
+// receipts.ts/vendorPayments.ts/salesDocuments.ts - to net to exactly the
+// corrected journal's own figures). Filtering a SUM to `status = 'posted'`
+// only would silently drop the original's amount while keeping its
+// reversal's opposite-signed amount, which is not "excluding a superseded
+// entry" - it's actively getting the arithmetic wrong by exactly double the
+// reversed amount. Proven by this phase's own test script: editing an
+// invoice from 118,000 to 236,000 must net to 236,000, not 354,000.
+//
+// So: every balance/aggregate function below (getAccountBalance,
+// getAccountOpeningBalance, getLedger's running balance, getTrialBalance)
+// sums ALL journal_lines regardless of status. `status = 'posted'` is used
+// ONLY to decide which individual journals are shown as separate ROWS in
+// getLedger's displayed transaction list - a pure display concern, kept
+// mathematically honest by still folding a hidden (reversed) row's amount
+// into the running balance shown on the rows around it.
+
 /**
  * Net balance of one account, optionally as of a given date (inclusive),
  * signed by its normal_balance so an Asset/Expense account reads positive
  * when it carries a debit balance and a Liability/Equity/Revenue account
  * reads positive when it carries a credit balance - the conventional
- * presentation for a Trial Balance/financial statement (not built yet -
- * this is the primitive a future one would call per account).
+ * presentation for a Trial Balance/financial statement.
  */
 export async function getAccountBalance(accountId: number, asOfDate?: string): Promise<number> {
   const [accountRows] = await pool.query<any[]>("SELECT * FROM chart_of_accounts WHERE id = ?", [accountId]);
@@ -538,15 +571,54 @@ export async function getAccountBalance(accountId: number, asOfDate?: string): P
 }
 
 /**
- * Chronological postings to one account with a running balance, signed the
- * same way as getAccountBalance. The general-ledger view for a single
- * account - a Trial Balance (not built yet) would call getAccountBalance
- * across every account instead.
+ * Net balance of one account from journal lines strictly BEFORE
+ * `beforeDate` (exclusive) - the "opening balance" a General Ledger view
+ * starts its running total from, rather than assuming everything before
+ * the requested range is zero (Phase 5, Step 3). Signed the same way as
+ * getAccountBalance.
  */
-export async function getLedger(accountId: number, from?: string, to?: string) {
+export async function getAccountOpeningBalance(accountId: number, beforeDate: string): Promise<number> {
   const [accountRows] = await pool.query<any[]>("SELECT * FROM chart_of_accounts WHERE id = ?", [accountId]);
   const account = accountRows[0] as ChartOfAccount | undefined;
   if (!account) throw new AccountingError("Account not found");
+
+  const [rows] = await pool.query<any[]>(
+    `SELECT COALESCE(SUM(jl.debit), 0) as total_debit, COALESCE(SUM(jl.credit), 0) as total_credit
+     FROM journal_lines jl
+     JOIN journals j ON j.id = jl.journal_id
+     WHERE jl.account_id = ? AND j.journal_date < ?`,
+    [accountId, beforeDate]
+  );
+  const totalDebit = Number(rows[0].total_debit);
+  const totalCredit = Number(rows[0].total_credit);
+  return account.normal_balance === "debit" ? round2(totalDebit - totalCredit) : round2(totalCredit - totalDebit);
+}
+
+export interface GetLedgerOptions {
+  sourceType?: string;
+  reference?: string;
+}
+
+/**
+ * Chronological postings to one account with an opening balance (from
+ * getAccountOpeningBalance, when `from` is given) and a running balance
+ * from there, signed the same way as getAccountBalance.
+ *
+ * The running balance is accumulated over EVERY journal line in range,
+ * regardless of status (see the note above this section) - but only rows
+ * whose journal is `status = 'posted'` are pushed into the returned
+ * `entries` list. A reversed original is folded into the running balance
+ * silently, without appearing as its own row (Phase 5, Step 2: "do not
+ * include reversed journals as active ledger entries"), while its
+ * reversal - itself posted - both appears as a row AND is what makes the
+ * displayed running-balance numbers add up correctly.
+ */
+export async function getLedger(accountId: number, from?: string, to?: string, options: GetLedgerOptions = {}) {
+  const [accountRows] = await pool.query<any[]>("SELECT * FROM chart_of_accounts WHERE id = ?", [accountId]);
+  const account = accountRows[0] as ChartOfAccount | undefined;
+  if (!account) throw new AccountingError("Account not found");
+
+  const openingBalance = from ? await getAccountOpeningBalance(accountId, from) : 0;
 
   const clauses = ["jl.account_id = ?"];
   const params: unknown[] = [accountId];
@@ -557,6 +629,14 @@ export async function getLedger(accountId: number, from?: string, to?: string) {
   if (to) {
     clauses.push("j.journal_date <= ?");
     params.push(to);
+  }
+  if (options.sourceType) {
+    clauses.push("j.source_type = ?");
+    params.push(options.sourceType);
+  }
+  if (options.reference) {
+    clauses.push("j.reference LIKE ?");
+    params.push(`%${options.reference}%`);
   }
 
   const [rows] = await pool.query<any[]>(
@@ -571,12 +651,25 @@ export async function getLedger(accountId: number, from?: string, to?: string) {
   );
 
   const sign = account.normal_balance === "debit" ? 1 : -1;
-  let running = 0;
-  const entries = rows.map((r) => {
+  let running = openingBalance;
+  const entries: {
+    journal_id: number;
+    journal_date: string;
+    reference: string | null;
+    source_type: string | null;
+    source_id: number | null;
+    description: string | null;
+    status: JournalStatus;
+    debit: number;
+    credit: number;
+    running_balance: number;
+  }[] = [];
+  for (const r of rows) {
     const debit = Number(r.debit);
     const credit = Number(r.credit);
     running = round2(running + sign * (debit - credit));
-    return {
+    if (r.status !== "posted") continue; // folded into `running` above, not shown as its own row
+    entries.push({
       journal_id: r.journal_id,
       journal_date: r.journal_date,
       reference: r.reference,
@@ -587,8 +680,120 @@ export async function getLedger(accountId: number, from?: string, to?: string) {
       debit,
       credit,
       running_balance: running,
+    });
+  }
+
+  return { account, openingBalance, entries, closingBalance: running };
+}
+
+export interface GetGeneralLedgerInput extends GetLedgerOptions {
+  companyId: number;
+  accountId: number;
+  from: string;
+  to: string;
+}
+
+/**
+ * The company-isolation-enforcing entry point for the General Ledger API
+ * (Phase 5, Step 10): rejects the request outright if the requested
+ * account does not actually belong to the requested company, rather than
+ * quietly returning another company's data. Delegates everything else to
+ * getLedger - no logic is duplicated between the two.
+ */
+export async function getGeneralLedger(input: GetGeneralLedgerInput) {
+  const [accountRows] = await pool.query<any[]>("SELECT company_id FROM chart_of_accounts WHERE id = ?", [input.accountId]);
+  const account = accountRows[0];
+  if (!account) throw new AccountingError("Account not found");
+  if (Number(account.company_id) !== Number(input.companyId)) {
+    throw new AccountingError("This account does not belong to the requested company");
+  }
+
+  const result = await getLedger(input.accountId, input.from, input.to, {
+    sourceType: input.sourceType,
+    reference: input.reference,
+  });
+  return { ...result, from: input.from, to: input.to };
+}
+
+export interface TrialBalanceRow {
+  account_id: number;
+  account_code: string;
+  name: string;
+  account_type: LedgerAccountType;
+  category: string | null;
+  normal_balance: NormalBalance;
+  debit: number;
+  credit: number;
+}
+
+export interface TrialBalanceResult {
+  asOfDate: string;
+  rows: TrialBalanceRow[];
+  totalDebit: number;
+  totalCredit: number;
+  /** True when totalDebit === totalCredit, which a correctly-enforced
+   * double-entry ledger guarantees mathematically - this is a defensive
+   * integrity check, surfaced honestly, never silently corrected
+   * (Phase 5, Step 16). */
+  isBalanced: boolean;
+}
+
+/**
+ * Built entirely from journals + journal_lines + chart_of_accounts (never
+ * receipts/vendor_payments/expenses/documents/accounts.balance/
+ * journal_entries - those are source/business tables, not the accounting
+ * ledger), for one company's active accounts, up to `asOfDate` (inclusive).
+ * Sums every journal line regardless of `status` - see the note above
+ * getAccountBalance: a reversed original and its reversal must both be
+ * summed for the net to correctly come out to zero (or, after an edit, to
+ * exactly the corrected journal's figures) - filtering to `status =
+ * 'posted'` only would silently drop the original half of that
+ * cancelling pair and get every edited/reversed account's total wrong.
+ * Each account nets its debits and credits into a single signed figure,
+ * placed in whichever column it's actually on (positive net -> Debit
+ * column, negative net -> Credit column) - this is presentation, not
+ * per-account normal_balance logic; normal_balance only matters for the
+ * General Ledger's running-balance sign. An account with zero net
+ * activity (including one whose activity was fully offset by a reversal)
+ * is omitted, per "include all active posting accounts that have
+ * accounting activity".
+ */
+export async function getTrialBalance(companyId: number, asOfDate: string): Promise<TrialBalanceResult> {
+  const [rows] = await pool.query<any[]>(
+    `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category, coa.normal_balance,
+            COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) as net
+     FROM chart_of_accounts coa
+     LEFT JOIN journal_lines jl ON jl.account_id = coa.id
+     LEFT JOIN journals j ON j.id = jl.journal_id AND j.journal_date <= ?
+     WHERE coa.company_id = ? AND coa.is_active = 1
+     GROUP BY coa.id, coa.account_code, coa.name, coa.account_type, coa.category, coa.normal_balance
+     HAVING net <> 0
+     ORDER BY coa.account_code ASC`,
+    [asOfDate, companyId]
+  );
+
+  const tbRows: TrialBalanceRow[] = rows.map((r) => {
+    const net = round2(Number(r.net));
+    return {
+      account_id: r.account_id,
+      account_code: r.account_code,
+      name: r.name,
+      account_type: r.account_type,
+      category: r.category,
+      normal_balance: r.normal_balance,
+      debit: net > 0 ? net : 0,
+      credit: net < 0 ? -net : 0,
     };
   });
 
-  return { account, entries, closingBalance: running };
+  const totalDebit = round2(tbRows.reduce((s, r) => s + r.debit, 0));
+  const totalCredit = round2(tbRows.reduce((s, r) => s + r.credit, 0));
+
+  return {
+    asOfDate,
+    rows: tbRows,
+    totalDebit,
+    totalCredit,
+    isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
+  };
 }
