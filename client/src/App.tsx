@@ -24,6 +24,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { GstReturnsPage } from "./pages/GstReturnsPage";
+import { StockLevelsPage, StockLedgerPage, OpeningStockPage, StockAdjustmentsPage } from "./pages/InventoryPage";
 import { TaxRatesPage } from "./pages/TaxRatesPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { DocumentNumberingPage } from "./pages/DocumentNumberingPage";
@@ -58,6 +59,10 @@ function App() {
           <Route path="/receipts" element={<ModuleGate module="sales.receipts"><ReceiptsPage /></ModuleGate>} />
           <Route path="/customers" element={<ModuleGate module="contacts.customers"><CustomersPage /></ModuleGate>} />
           <Route path="/items" element={<ModuleGate module="items.items"><ItemsPage /></ModuleGate>} />
+          <Route path="/inventory/stock-levels" element={<ModuleGate module="inventory.stock"><StockLevelsPage /></ModuleGate>} />
+          <Route path="/inventory/stock-ledger" element={<ModuleGate module="inventory.stock"><StockLedgerPage /></ModuleGate>} />
+          <Route path="/inventory/opening-stock" element={<ModuleGate module="inventory.stock"><OpeningStockPage /></ModuleGate>} />
+          <Route path="/inventory/adjustments" element={<ModuleGate module="inventory.stock"><StockAdjustmentsPage /></ModuleGate>} />
           <Route path="/companies" element={<ModuleGate module="settings.company_profile"><CompaniesPage /></ModuleGate>} />
           <Route path="/vendors" element={<ModuleGate module="contacts.vendors"><VendorsPage /></ModuleGate>} />
           <Route path="/expenses" element={<ModuleGate module="expenses.expenses"><ExpensesPage /></ModuleGate>} />

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Table, Button, Input, InputNumber, Space, Modal, Form, message, Popconfirm, Typography } from "antd";
+import { Table, Button, Input, InputNumber, Space, Modal, Form, message, Popconfirm, Typography, Switch, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
@@ -46,7 +46,7 @@ export function ItemsPage() {
   function openCreate() {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ unit: "pcs", tax_rate: 18 });
+    form.setFieldsValue({ unit: "pcs", tax_rate: 18, track_inventory: false });
     setModalOpen(true);
   }
 
@@ -56,6 +56,7 @@ export function ItemsPage() {
       ...record,
       default_rate: Number(record.default_rate),
       tax_rate: Number(record.tax_rate),
+      track_inventory: Boolean(record.track_inventory),
     });
     setModalOpen(true);
   }
@@ -96,6 +97,12 @@ export function ItemsPage() {
     { title: "Unit", dataIndex: "unit", key: "unit" },
     { title: "Rate", dataIndex: "default_rate", key: "default_rate" },
     { title: "Tax %", dataIndex: "tax_rate", key: "tax_rate" },
+    {
+      title: "Stock Tracked",
+      dataIndex: "track_inventory",
+      key: "track_inventory",
+      render: (v: boolean | number) => (Boolean(v) ? <Tag color="blue">Tracked</Tag> : <Tag>Not tracked</Tag>),
+    },
     {
       title: "Actions",
       key: "actions",
@@ -174,6 +181,14 @@ export function ItemsPage() {
           </Form.Item>
           <Form.Item name="tax_rate" label="Tax Rate (%)">
             <InputNumber style={{ width: "100%" }} min={0} max={100} />
+          </Form.Item>
+          <Form.Item
+            name="track_inventory"
+            label="Track Stock"
+            valuePropName="checked"
+            tooltip="Only items with this enabled participate in stock tracking - leave off for services, freight, installation, etc."
+          >
+            <Switch />
           </Form.Item>
         </Form>
       </Modal>

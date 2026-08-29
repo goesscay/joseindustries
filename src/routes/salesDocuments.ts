@@ -8,6 +8,7 @@ import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
 import { AccountingError, getJournalBySource, postTaxInvoiceJournalTx, reverseJournalTx } from "../services/accounting";
+import { InsufficientStockError, InventoryError, postDocumentStockMovementTx, reverseStockForSourceTx } from "../services/inventory";
 import { Company, Customer, DocType, DocumentItem, DocumentRecord, Journal, Role } from "../types";
 
 export interface SalesDocumentRouterOptions {
@@ -191,8 +192,18 @@ export function createSalesDocumentRouter(
     ...createGuard,
     requireModuleAccess(MODULE, "create"),
     asyncHandler(async (req, res) => {
-      const { company_id, customer_id, issue_date, notes, items, converted_from_id, reverse_charge, freight_charges, installation_charges } =
-        req.body ?? {};
+      const {
+        company_id,
+        customer_id,
+        issue_date,
+        notes,
+        items,
+        converted_from_id,
+        reverse_charge,
+        freight_charges,
+        installation_charges,
+        confirm_negative_stock,
+      } = req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
       }
@@ -327,6 +338,7 @@ export function createSalesDocumentRouter(
         // since this same factory function is shared across all of them
         // and docType is the only thing distinguishing this call.
         let journal: Journal | undefined;
+        let stock: Awaited<ReturnType<typeof postDocumentStockMovementTx>> | undefined;
         if (docType === "tax_invoice") {
           journal = await postTaxInvoiceJournalTx(conn, {
             companyId: Number(company_id),
@@ -340,18 +352,40 @@ export function createSalesDocumentRouter(
             igstTotal,
             createdBy: req.user!.sub,
           });
+          // Phase 12: stock-out follows the journal's own timing exactly -
+          // posted unconditionally at creation regardless of the document's
+          // 'draft' status, since the journal already does the same (a
+          // "draft" Tax Invoice has real ledger effect in this app - see
+          // Phase 11B's own audit). Soft-blocks on negative stock unless
+          // the caller explicitly confirms.
+          stock = await postDocumentStockMovementTx(conn, {
+            companyId: Number(company_id),
+            sourceType: "tax_invoice",
+            sourceId: documentId,
+            txnDate: issue_date,
+            direction: "out",
+            lines: lines.map((l) => ({ item_id: l.item_id, qty: l.qty, unit: l.unit })),
+            createdBy: req.user!.sub,
+            confirmNegativeStock: Boolean(confirm_negative_stock),
+          });
         }
 
         await conn.commit();
         const created = await findById(documentId);
         const docItems = await findItemsForDocument(documentId);
-        res
-          .status(201)
-          .json({ document: created, items: docItems, journal: journal ? { id: journal.id, status: journal.status } : null });
+        res.status(201).json({
+          document: created,
+          items: docItems,
+          journal: journal ? { id: journal.id, status: journal.status } : null,
+          stock: stock ? { posted: stock.posted.length, skipped: stock.skipped } : null,
+        });
       } catch (err) {
         await conn.rollback();
-        if (err instanceof AccountingError) {
-          return res.status(400).json({ message: `${title} could not be recorded: ${err.message}` });
+        if (err instanceof InsufficientStockError) {
+          return res.status(err.status).json({ message: err.message, code: "INSUFFICIENT_STOCK", items: err.items });
+        }
+        if (err instanceof AccountingError || err instanceof InventoryError) {
+          return res.status(err.status).json({ message: `${title} could not be recorded: ${err.message}` });
         }
         throw err;
       } finally {
@@ -372,7 +406,17 @@ export function createSalesDocumentRouter(
         return res.status(400).json({ message: `Cannot edit a cancelled ${title.toLowerCase()}` });
       }
 
-      const { company_id, customer_id, issue_date, notes, items, reverse_charge, freight_charges, installation_charges } = req.body ?? {};
+      const {
+        company_id,
+        customer_id,
+        issue_date,
+        notes,
+        items,
+        reverse_charge,
+        freight_charges,
+        installation_charges,
+        confirm_negative_stock,
+      } = req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
       }
@@ -490,6 +534,7 @@ export function createSalesDocumentRouter(
         // this mirrors, where the lock had to be taken explicitly first
         // because nothing else in that handler took one).
         let journal: Journal | undefined;
+        let stock: Awaited<ReturnType<typeof postDocumentStockMovementTx>> | undefined;
         if (docType === "tax_invoice") {
           const priorJournal = await getJournalBySource("tax_invoice", id);
           if (priorJournal) {
@@ -507,16 +552,41 @@ export function createSalesDocumentRouter(
             igstTotal,
             createdBy: req.user!.sub,
           });
+          // Phase 12: same reverse-then-repost shape as the journal just
+          // above - reverse whatever stock is currently active for this
+          // invoice, then post fresh movements for the corrected lines
+          // (evaluated against the balance AFTER that reversal, so editing
+          // an invoice down doesn't spuriously warn about stock the
+          // reversal just gave back).
+          await reverseStockForSourceTx(conn, "tax_invoice", id, req.user!.sub);
+          stock = await postDocumentStockMovementTx(conn, {
+            companyId: Number(company_id),
+            sourceType: "tax_invoice",
+            sourceId: id,
+            txnDate: issue_date,
+            direction: "out",
+            lines: lines.map((l) => ({ item_id: l.item_id, qty: l.qty, unit: l.unit })),
+            createdBy: req.user!.sub,
+            confirmNegativeStock: Boolean(confirm_negative_stock),
+          });
         }
 
         await conn.commit();
         const updated = await findById(id);
         const docItems = await findItemsForDocument(id);
-        res.json({ document: updated, items: docItems, journal: journal ? { id: journal.id, status: journal.status } : null });
+        res.json({
+          document: updated,
+          items: docItems,
+          journal: journal ? { id: journal.id, status: journal.status } : null,
+          stock: stock ? { posted: stock.posted.length, skipped: stock.skipped } : null,
+        });
       } catch (err) {
         await conn.rollback();
-        if (err instanceof AccountingError) {
-          return res.status(400).json({ message: `${title} could not be updated: ${err.message}` });
+        if (err instanceof InsufficientStockError) {
+          return res.status(err.status).json({ message: err.message, code: "INSUFFICIENT_STOCK", items: err.items });
+        }
+        if (err instanceof AccountingError || err instanceof InventoryError) {
+          return res.status(err.status).json({ message: `${title} could not be updated: ${err.message}` });
         }
         throw err;
       } finally {
@@ -568,14 +638,19 @@ export function createSalesDocumentRouter(
           if (priorJournal) {
             await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
           }
+          // Phase 12: cancelling reverses stock exactly like it reverses
+          // the journal just above - no replacement stock transaction is
+          // posted for a cancelled invoice, same "reverse only, never
+          // repost" rule.
+          await reverseStockForSourceTx(conn, "tax_invoice", id, req.user!.sub);
         }
 
         await conn.query("UPDATE documents SET status = ? WHERE id = ?", [status, id]);
         await conn.commit();
       } catch (err) {
         await conn.rollback();
-        if (err instanceof AccountingError) {
-          return res.status(400).json({ message: `${title} could not be cancelled: ${err.message}` });
+        if (err instanceof AccountingError || err instanceof InventoryError || err instanceof InsufficientStockError) {
+          return res.status(err.status).json({ message: `${title} could not be cancelled: ${err.message}` });
         }
         throw err;
       } finally {
@@ -618,6 +693,13 @@ export function createSalesDocumentRouter(
           if (priorJournal) {
             await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
           }
+          // Phase 12: a "draft" Tax Invoice already has real stock effect
+          // (stock posts unconditionally at creation, same timing as the
+          // journal - see the POST handler above) - so deleting one must
+          // reverse that stock too, not just its journal, or the deleted
+          // invoice would leave a permanently-understated on-hand quantity
+          // behind with no document left to explain it.
+          await reverseStockForSourceTx(conn, "tax_invoice", id, req.user!.sub);
         }
 
         await conn.query("DELETE FROM documents WHERE id = ?", [id]);
@@ -625,8 +707,8 @@ export function createSalesDocumentRouter(
         res.json({ message: `${title} deleted` });
       } catch (err) {
         await conn.rollback();
-        if (err instanceof AccountingError) {
-          return res.status(400).json({ message: `${title} could not be deleted: ${err.message}` });
+        if (err instanceof AccountingError || err instanceof InventoryError || err instanceof InsufficientStockError) {
+          return res.status(err.status).json({ message: `${title} could not be deleted: ${err.message}` });
         }
         throw err;
       } finally {

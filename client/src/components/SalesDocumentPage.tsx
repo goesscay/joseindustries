@@ -24,7 +24,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, SwapOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "./QuickAddCustomerModal";
 import {
@@ -38,6 +38,7 @@ import {
   Role,
   TermsTemplate,
   TermsTemplateDocType,
+  InsufficientStockItem,
 } from "../types";
 
 const PAGE_SIZE = 10;
@@ -327,6 +328,38 @@ export function SalesDocumentPage({
     form.setFieldsValue({ items: current });
   }
 
+  /** Phase 12: a Tax Invoice's stock-out is soft-blocked (409,
+   * code: INSUFFICIENT_STOCK) when it would drive an item negative -
+   * never silently, and never a hard refusal. Show exactly what would go
+   * negative and let the user explicitly confirm before resubmitting with
+   * confirm_negative_stock: true. Other document types never receive this
+   * response (only tax_invoice posts stock at all), so this is a no-op
+   * passthrough for them. */
+  function confirmNegativeStock(items: InsufficientStockItem[]): Promise<boolean> {
+    return new Promise((resolve) => {
+      Modal.confirm({
+        title: "Insufficient stock",
+        content: (
+          <div>
+            <p>This would take the following item(s) below zero on hand:</p>
+            <ul>
+              {items.map((i) => (
+                <li key={i.itemId}>
+                  {i.itemName}: requesting {i.requestedQty}, only {i.availableQty} available
+                </li>
+              ))}
+            </ul>
+            <p>Proceed anyway?</p>
+          </div>
+        ),
+        okText: "Proceed anyway",
+        cancelText: "Cancel",
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+  }
+
   async function handleSubmit() {
     const values = await form.validateFields();
     setSaving(true);
@@ -347,12 +380,29 @@ export function SalesDocumentPage({
         return;
       }
 
-      if (editingDoc) {
-        await api.put(`${apiPath}/${editingDoc.id}`, payload);
-        message.success(`${title} updated`);
-      } else {
-        await api.post(apiPath, payload);
-        message.success(`${title} created`);
+      try {
+        if (editingDoc) {
+          await api.put(`${apiPath}/${editingDoc.id}`, payload);
+          message.success(`${title} updated`);
+        } else {
+          await api.post(apiPath, payload);
+          message.success(`${title} created`);
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && (err.body as any)?.code === "INSUFFICIENT_STOCK") {
+          const proceed = await confirmNegativeStock((err.body as any).items as InsufficientStockItem[]);
+          if (!proceed) return;
+          payload.confirm_negative_stock = true;
+          if (editingDoc) {
+            await api.put(`${apiPath}/${editingDoc.id}`, payload);
+            message.success(`${title} updated`);
+          } else {
+            await api.post(apiPath, payload);
+            message.success(`${title} created`);
+          }
+        } else {
+          throw err;
+        }
       }
       setModalOpen(false);
       load();

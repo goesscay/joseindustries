@@ -1,8 +1,15 @@
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The full parsed JSON error body, when the response was JSON - lets a
+   * caller read structured fields beyond `.message` (e.g. Phase 12's
+   * `{ code: 'INSUFFICIENT_STOCK', items: [...] }`) without every other
+   * existing call site (which only ever reads `.message`) needing to
+   * change. */
+  body?: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -17,7 +24,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const body = contentType.includes("application/json") ? await res.json() : undefined;
 
   if (!res.ok) {
-    throw new ApiError(res.status, body?.message ?? "Request failed");
+    throw new ApiError(res.status, body?.message ?? "Request failed", body);
   }
   return body as T;
 }

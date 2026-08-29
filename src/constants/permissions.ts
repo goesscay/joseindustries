@@ -43,6 +43,8 @@ export const PERMISSION_MODULES: ModuleDef[] = [
 
   { key: "items.items", label: "Items", group: "Items" },
 
+  { key: "inventory.stock", label: "Stock", group: "Inventory" },
+
   { key: "reports.reports", label: "Reports", group: "Reports" },
 
   { key: "settings.company_profile", label: "Company Profile", group: "Settings" },

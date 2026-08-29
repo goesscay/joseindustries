@@ -6,6 +6,7 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { computeLine, LineInput } from "../utils/totals";
 import { AccountingError, getJournalBySource, postPurchaseBillJournalTx, reverseJournalTx } from "../services/accounting";
+import { InsufficientStockError, InventoryError, postDocumentStockMovementTx, reverseStockForSourceTx } from "../services/inventory";
 import { Company, Journal, PurchaseBill, PurchaseBillItem, Vendor } from "../types";
 
 // Purchase Bills - the first real purchase-side document (Phase 7A).
@@ -472,14 +473,36 @@ purchaseBillsRouter.put(
               createdBy: req.user!.sub,
             });
 
+      // Phase 12: stock mirrors the same reverse-then-conditionally-repost
+      // shape as the journal just above, but its OWN condition - stock
+      // should only be active while status IS 'received', never 'draft' -
+      // is deliberately different from the journal's (which reposts for
+      // both 'draft' and 'received', only skipping 'cancelled'). Reversing
+      // is unconditional (a no-op if nothing was ever posted, e.g. a
+      // draft-to-draft edit); reposting only happens when the new status is
+      // 'received'. Receiving can never go negative, so no confirmation
+      // flow applies here (unlike a Tax Invoice's stock-out).
+      await reverseStockForSourceTx(conn, "purchase_bill", id, req.user!.sub);
+      if (resolvedStatus === "received") {
+        await postDocumentStockMovementTx(conn, {
+          companyId: Number(req.body.company_id),
+          sourceType: "purchase_bill",
+          sourceId: id,
+          txnDate: bill_date,
+          direction: "in",
+          lines: lines.map((l) => ({ item_id: l.item_id, qty: l.qty, unit: l.unit })),
+          createdBy: req.user!.sub,
+        });
+      }
+
       await conn.commit();
       const updated = await findById(id);
       const items = await findItemsForBill(id);
       res.json({ bill: updated, items, journal: journal ? { id: journal.id, status: journal.status } : null });
     } catch (err) {
       await conn.rollback();
-      if (err instanceof AccountingError) {
-        return res.status(400).json({ message: `Purchase bill could not be updated: ${err.message}` });
+      if (err instanceof AccountingError || err instanceof InventoryError || err instanceof InsufficientStockError) {
+        return res.status(err.status).json({ message: `Purchase bill could not be updated: ${err.message}` });
       }
       throw err;
     } finally {
@@ -517,14 +540,20 @@ purchaseBillsRouter.delete(
       if (priorJournal) {
         await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
       }
+      // A draft bill (the only kind deletable here) can never have live
+      // stock in practice - stock only ever posts while status='received',
+      // and PUT already reverses stock the moment status leaves 'received'
+      // - but this call is a no-op-safe defensive mirror of the journal
+      // reversal just above, not load-bearing.
+      await reverseStockForSourceTx(conn, "purchase_bill", id, req.user!.sub);
 
       await conn.query("DELETE FROM purchase_bills WHERE id = ?", [id]);
       await conn.commit();
       res.json({ message: "Purchase bill deleted" });
     } catch (err) {
       await conn.rollback();
-      if (err instanceof AccountingError) {
-        return res.status(400).json({ message: `Purchase bill could not be deleted: ${err.message}` });
+      if (err instanceof AccountingError || err instanceof InventoryError || err instanceof InsufficientStockError) {
+        return res.status(err.status).json({ message: `Purchase bill could not be deleted: ${err.message}` });
       }
       throw err;
     } finally {

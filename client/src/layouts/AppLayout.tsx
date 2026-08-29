@@ -48,6 +48,7 @@ import {
   PieChartOutlined,
   DatabaseOutlined,
   BookOutlined,
+  UnorderedListOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { ROUTE_MODULE } from "../constants/routeModules";
@@ -148,6 +149,17 @@ export function AppLayout() {
                 { key: "/items/categories", icon: <FolderOutlined />, label: comingSoonLabel("Categories"), disabled: true },
                 { key: "/items/units", icon: <ColumnWidthOutlined />, label: comingSoonLabel("Units"), disabled: true },
                 { key: "/items/price-lists", icon: <TagOutlined />, label: comingSoonLabel("Price Lists"), disabled: true },
+              ],
+            },
+            {
+              key: "group-inventory",
+              icon: <DatabaseOutlined />,
+              label: "Inventory",
+              children: [
+                { key: "/inventory/stock-levels", icon: <UnorderedListOutlined />, label: "Stock Levels" },
+                { key: "/inventory/stock-ledger", icon: <HistoryOutlined />, label: "Stock Ledger" },
+                { key: "/inventory/opening-stock", icon: <FileAddOutlined />, label: "Opening Stock" },
+                { key: "/inventory/adjustments", icon: <SwapOutlined />, label: "Stock Adjustments" },
               ],
             },
             {

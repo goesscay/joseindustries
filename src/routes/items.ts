@@ -44,12 +44,12 @@ itemsRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
-    const { name, hsn_code, unit, default_rate, tax_rate } = req.body ?? {};
+    const { name, hsn_code, unit, default_rate, tax_rate, track_inventory } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
 
     const [result] = await pool.query<any>(
-      `INSERT INTO items (name, hsn_code, unit, default_rate, tax_rate) VALUES (?, ?, ?, ?, ?)`,
-      [name, hsn_code || null, unit || "pcs", default_rate || 0, tax_rate ?? 18]
+      `INSERT INTO items (name, hsn_code, unit, default_rate, tax_rate, track_inventory) VALUES (?, ?, ?, ?, ?, ?)`,
+      [name, hsn_code || null, unit || "pcs", default_rate || 0, tax_rate ?? 18, track_inventory ? 1 : 0]
     );
     const created = await findItemById(result.insertId);
     res.status(201).json({ item: created });
@@ -64,12 +64,12 @@ itemsRouter.put(
     const existing = await findItemById(id);
     if (!existing) return res.status(404).json({ message: "Item not found" });
 
-    const { name, hsn_code, unit, default_rate, tax_rate } = req.body ?? {};
+    const { name, hsn_code, unit, default_rate, tax_rate, track_inventory } = req.body ?? {};
     if (!name) return res.status(400).json({ message: "Name is required" });
 
     await pool.query(
-      `UPDATE items SET name = ?, hsn_code = ?, unit = ?, default_rate = ?, tax_rate = ? WHERE id = ?`,
-      [name, hsn_code || null, unit || "pcs", default_rate || 0, tax_rate ?? 18, id]
+      `UPDATE items SET name = ?, hsn_code = ?, unit = ?, default_rate = ?, tax_rate = ?, track_inventory = ? WHERE id = ?`,
+      [name, hsn_code || null, unit || "pcs", default_rate || 0, tax_rate ?? 18, track_inventory ? 1 : 0, id]
     );
     const updated = await findItemById(id);
     res.json({ item: updated });

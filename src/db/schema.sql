@@ -928,3 +928,86 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
 -- no FK (purchase_orders didn't exist when that column was added) and
 -- still no uniqueness (one-to-many-ready for future partial billing).
 ALTER TABLE purchase_bills ADD INDEX IF NOT EXISTS idx_purchase_bills_po (purchase_order_id);
+
+-- ============================================================================
+-- Phase 12: Inventory & Stock Management (quantity-only - see the Phase 12A
+-- audit for why FIFO/weighted-average/standard-cost, warehouses, batches,
+-- serial numbers, UOM conversion, and COGS/Inventory GL postings are all
+-- deliberately NOT part of this phase). Adds exactly two things: a flag on
+-- the existing global `items` table, and one new, company-scoped,
+-- append-only stock ledger table. Nothing else in the schema changes.
+-- ============================================================================
+
+-- `items` stays a single GLOBAL catalog (shared by both companies, exactly
+-- as before) - only a per-item opt-in flag is added. A non-physical line
+-- (freight, installation, a service) should never participate in stock
+-- tracking, so this defaults to FALSE: an existing item only starts
+-- generating stock_transactions once a user deliberately turns it on.
+ALTER TABLE items
+  ADD COLUMN IF NOT EXISTS track_inventory BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- The stock ledger - the exact structural analogue of journals/journal_lines
+-- (schema.sql's Phase 2 block above), deliberately mirroring its proven
+-- immutable/reversal shape rather than inventing a new one:
+--   - never edited or deleted once posted; a correction is a reversal
+--     transaction (reverses_txn_id) followed by a fresh corrected posting,
+--     exactly like a journal's reverses_journal_id.
+--   - status stays 'posted' unless reversed - there is no "draft" stock
+--     transaction, same as journals having no draft/approval workflow.
+--   - source_type/source_id optionally point back at the business
+--     transaction that caused this posting ('purchase_bill'/'tax_invoice'/
+--     'opening'/'adjustment'), same pattern as journals.source_type/id.
+--   - unit_cost is nullable and UNUSED in this phase (quantity-only
+--     inventory per the Phase 12A audit's valuation recommendation) - kept
+--     as a column now purely so a future valuation phase doesn't need
+--     another migration, not because anything reads or writes it yet.
+--   - qty is always stored positive; direction is implied entirely by
+--     txn_type (opening/purchase_receipt/adjustment_in add to on-hand;
+--     sale_issue/adjustment_out subtract) - kept this way (rather than a
+--     signed quantity) so a reversal is always "post the same txn_type's
+--     opposite effect", mirroring how a journal reversal swaps debit/credit
+--     rather than negating a single signed amount.
+--   - company_id is mandatory: items are a shared global catalog, but stock
+--     itself is always isolated per (company_id, item_id), never a global
+--     quantity on the items row itself.
+CREATE TABLE IF NOT EXISTS stock_transactions (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  item_id INT UNSIGNED NOT NULL,
+  txn_date DATE NOT NULL,
+  txn_type ENUM('opening', 'purchase_receipt', 'sale_issue', 'adjustment_in', 'adjustment_out') NOT NULL,
+  qty DECIMAL(10, 2) NOT NULL,
+  unit_cost DECIMAL(12, 2) NULL,
+  source_type VARCHAR(30) NULL,
+  source_id INT UNSIGNED NULL,
+  status ENUM('posted', 'reversed') NOT NULL DEFAULT 'posted',
+  reverses_txn_id INT UNSIGNED NULL,
+  notes VARCHAR(255) NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (qty > 0),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (item_id) REFERENCES items(id),
+  FOREIGN KEY (reverses_txn_id) REFERENCES stock_transactions(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Every stock report/query filters by (company_id, item_id) and usually a
+-- date range, and reversal lookups filter by source_type/source_id (to find
+-- "the currently-active stock transaction(s) for this Purchase Bill/Tax
+-- Invoice line") - same indexing reasoning as journals' own two indexes
+-- above (Phase 5's audit).
+ALTER TABLE stock_transactions ADD INDEX IF NOT EXISTS idx_stock_txn_company_item (company_id, item_id);
+ALTER TABLE stock_transactions ADD INDEX IF NOT EXISTS idx_stock_txn_source (source_type, source_id);
+
+-- Opening stock is entered manually, once, per (company_id, item_id) - never
+-- inferred from historical documents (the Phase 12A audit confirmed there is
+-- no historical data to infer from, and this system's own convention is to
+-- never fabricate what isn't there). A second opening entry for the same
+-- item/company is rejected at the APPLICATION layer (inside a transaction,
+-- with the existing rows locked FOR UPDATE) unless the first is explicitly
+-- reversed first - MariaDB has no way to express "unique only among
+-- status='posted' rows" as a real constraint, so this stays an ordinary
+-- (non-unique) index purely to make that existence check fast, not a
+-- database-enforced guarantee.
+ALTER TABLE stock_transactions ADD INDEX IF NOT EXISTS idx_stock_txn_opening (company_id, item_id, txn_type, status);

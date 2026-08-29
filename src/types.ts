@@ -130,6 +130,10 @@ export interface Item {
   unit: string;
   default_rate: string;
   tax_rate: string;
+  /** Phase 12: opt-in flag - only items with this set participate in stock
+   * tracking at all. Defaults false so non-physical lines (freight,
+   * installation, services) never generate stock_transactions. */
+  track_inventory: boolean | number;
   created_at: string;
   updated_at: string;
 }
@@ -486,6 +490,31 @@ export interface CreateJournalInput {
   description?: string | null;
   created_by?: number | null;
   lines: JournalLineInput[];
+}
+
+// ---- Phase 12: Inventory & Stock Management - a stock ledger structurally
+// mirroring journals/journal_lines' immutable/reversal shape (see
+// stock_transactions' own schema.sql comment for the full reasoning).
+// Quantity-only: no cost/valuation is computed or relied on in this phase. ----
+
+export type StockTxnType = "opening" | "purchase_receipt" | "sale_issue" | "adjustment_in" | "adjustment_out";
+export type StockTxnStatus = "posted" | "reversed";
+
+export interface StockTransaction {
+  id: number;
+  company_id: number;
+  item_id: number;
+  txn_date: string;
+  txn_type: StockTxnType;
+  qty: string;
+  unit_cost: string | null;
+  source_type: string | null;
+  source_id: number | null;
+  status: StockTxnStatus;
+  reverses_txn_id: number | null;
+  notes: string | null;
+  created_by: number | null;
+  created_at: string;
 }
 
 declare global {
