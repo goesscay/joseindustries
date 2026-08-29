@@ -6,7 +6,13 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { computeLine, LineInput } from "../utils/totals";
 import { AccountingError, getJournalBySource, postPurchaseBillJournalTx, reverseJournalTx } from "../services/accounting";
-import { InsufficientStockError, InventoryError, postDocumentStockMovementTx, reverseStockForSourceTx } from "../services/inventory";
+import {
+  InsufficientStockError,
+  InventoryError,
+  getTrackedItemIds,
+  postDocumentStockMovementTx,
+  reverseStockForSourceTx,
+} from "../services/inventory";
 import { Company, Journal, PurchaseBill, PurchaseBillItem, Vendor } from "../types";
 
 // Purchase Bills - the first real purchase-side document (Phase 7A).
@@ -73,6 +79,27 @@ function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
       tax_rate,
     };
   });
+}
+
+/**
+ * Phase 12D: classifies each already-computed line as inventory-tracked or
+ * not (via items.track_inventory, the exact same definition
+ * postDocumentStockMovementTx itself uses - see getTrackedItemIds), so
+ * postPurchaseBillJournalTx can split Dr Inventory vs Dr Purchases per
+ * line. A line with no item_id is never tracked (nothing to track it
+ * against - same rule the stock layer already applies).
+ */
+async function classifyLinesForJournal(
+  conn: import("mysql2/promise").PoolConnection,
+  computedLines: { line: NormalizedLine; computed: { taxableValue: number; taxAmount: number } }[]
+) {
+  const itemIds = [...new Set(computedLines.map(({ line }) => line.item_id).filter((id): id is number => id !== null))];
+  const trackedIds = await getTrackedItemIds(conn, itemIds);
+  return computedLines.map(({ line, computed }) => ({
+    isInventoryTracked: line.item_id !== null && trackedIds.has(line.item_id),
+    taxableValue: computed.taxableValue,
+    taxAmount: computed.taxAmount,
+  }));
 }
 
 async function validatePayload(body: any) {
@@ -327,8 +354,7 @@ purchaseBillsRouter.post(
         billId,
         billNo: docNumber,
         billDate: bill_date,
-        subtotal,
-        taxAmount,
+        lines: await classifyLinesForJournal(conn, computedLines),
         createdBy: req.user!.sub,
       });
 
@@ -468,8 +494,7 @@ purchaseBillsRouter.put(
               billId: id,
               billNo: existing.bill_no,
               billDate: bill_date,
-              subtotal,
-              taxAmount,
+              lines: await classifyLinesForJournal(conn, computedLines),
               createdBy: req.user!.sub,
             });
 

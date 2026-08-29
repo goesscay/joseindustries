@@ -407,6 +407,25 @@ async function lockItemRow(conn: PoolConnection, itemId: number): Promise<Item |
   return rows[0] as Item | undefined;
 }
 
+/**
+ * Phase 12D: which of the given item ids currently have track_inventory =
+ * true - a plain, unlocked read (this is a classification lookup, not a
+ * stock mutation; the actual per-item FOR UPDATE lock still happens inside
+ * postDocumentStockMovementTx when stock is actually posted). Exists so a
+ * caller that needs to classify document lines for a purpose OTHER than
+ * moving stock itself - e.g. Purchase Bill accounting choosing Inventory
+ * (1140) vs Purchases (5200) per line - can reuse the exact same
+ * "is this item tracked" definition the stock layer itself uses, rather
+ * than re-deriving it. Accounting.ts stays fully decoupled from this file
+ * (it only ever receives a plain boolean per line, resolved by the caller,
+ * never an item id it would look up itself).
+ */
+export async function getTrackedItemIds(executor: Executor, itemIds: number[]): Promise<Set<number>> {
+  if (itemIds.length === 0) return new Set();
+  const [rows] = await executor.query<any[]>("SELECT id FROM items WHERE id IN (?) AND track_inventory = 1", [itemIds]);
+  return new Set(rows.map((r) => r.id as number));
+}
+
 export interface PostDocumentStockMovementInput {
   companyId: number;
   sourceType: "purchase_bill" | "tax_invoice";

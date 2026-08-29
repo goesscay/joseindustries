@@ -637,52 +637,108 @@ export async function postExpenseJournalTx(conn: PoolConnection, input: PostExpe
   });
 }
 
+/** One Purchase Bill line, already computed (taxable value / tax), plus the
+ * ONE fact this function needs from the caller to classify it - whether the
+ * referenced item is currently inventory-tracked. Resolving `track_inventory`
+ * is deliberately the CALLER's job (purchaseBills.ts, which already imports
+ * services/inventory.ts for stock posting) - accounting.ts stays exactly as
+ * decoupled from inventory.ts as it always has been (see inventory.ts's own
+ * header comment), receiving only a plain boolean per line, never an item id
+ * it would have to look up itself. */
+export interface PurchaseBillJournalLine {
+  isInventoryTracked: boolean;
+  /** Pre-tax (GST-exclusive) amount for this line. */
+  taxableValue: number;
+  /** This line's share of the bill's tax - GST never enters Inventory or
+   * Purchases; it is always posted to Input GST separately (see Phase 12D's
+   * approved model's own worked example). */
+  taxAmount: number;
+}
+
 export interface PostPurchaseBillJournalInput {
   companyId: number;
   billId: number;
   billNo: string;
   billDate: string;
-  /** Pre-tax purchase amount (subtotal). */
-  subtotal: number;
-  /** Combined tax_amount as already stored on the bill - never recomputed
-   * here, same reasoning as Phase 6 expenses (no CGST/SGST/IGST split on
-   * the purchase side of this schema). */
-  taxAmount: number;
+  /** Phase 12D: replaces the old flat subtotal/taxAmount - each line is
+   * classified by the caller so this function can split Dr Inventory vs
+   * Dr Purchases correctly. A bill with only non-tracked lines behaves
+   * identically to before 12D (100% Dr Purchases); a bill with only
+   * tracked lines is 100% Dr Inventory; a mixed bill splits accordingly -
+   * never merged into one account. */
+  lines: PurchaseBillJournalLine[];
   createdBy: number | null;
 }
 
 /**
- * Dr Purchases (a Purchases/Expense-type account, not Inventory - items
- * aren't inventory-tracked in this schema; inventory accounting is
- * explicitly deferred), Dr Input GST if the bill has tax, Cr Accounts
- * Payable - the SAME company-specific AP account Expenses (Phase 6) and
- * Vendor Payments (Phase 3) already use, so a Purchase Bill followed by a
- * Vendor Payment nets correctly through that one shared account, exactly
- * like Expenses do. Must run on a `conn` already inside the caller's
- * transaction (see createJournalTx).
+ * Phase 12D: Dr Inventory (1140) for the inventory-tracked portion of the
+ * bill, Dr Purchases (5200) for the non-tracked portion (freight, services,
+ * items with track_inventory=false - exactly what every Purchase Bill did
+ * before this phase), Dr Input GST for the bill's combined tax (still one
+ * combined figure - no CGST/SGST/IGST split on the purchase side, unchanged
+ * since Phase 6), Cr Accounts Payable for the gross total - the SAME
+ * company-specific AP account Expenses (Phase 6) and Vendor Payments
+ * (Phase 3) already use, so a Purchase Bill followed by a Vendor Payment
+ * nets correctly through that one shared account, exactly like Expenses do.
+ * GST is never capitalized into Inventory or Purchases - it is always its
+ * own line, computed from the SAME combined tax total as before, split only
+ * by which asset/expense account it rides alongside.
+ *
+ * Either the inventory or the non-tracked bucket may be zero (a bill that's
+ * 100% one or the other) - that bucket's line, and its system-account
+ * lookup, is simply skipped, so a company that has never needed one of
+ * these two accounts isn't forced to have both configured. Must run on a
+ * `conn` already inside the caller's transaction (see createJournalTx).
  */
 export async function postPurchaseBillJournalTx(conn: PoolConnection, input: PostPurchaseBillJournalInput): Promise<Journal> {
-  const purchasesAccountId = await getSystemAccountByCategory(input.companyId, "Purchases");
-  if (!purchasesAccountId) {
-    throw new AccountingError("Purchases system account not found for this company");
+  let inventorySubtotal = 0;
+  let nonInventorySubtotal = 0;
+  let totalTax = 0;
+  for (const line of input.lines) {
+    if (line.isInventoryTracked) {
+      inventorySubtotal += line.taxableValue;
+    } else {
+      nonInventorySubtotal += line.taxableValue;
+    }
+    totalTax += line.taxAmount;
   }
+  inventorySubtotal = round2(inventorySubtotal);
+  nonInventorySubtotal = round2(nonInventorySubtotal);
+  totalTax = round2(totalTax);
+
   const apAccountId = await getSystemAccountByCategory(input.companyId, "Accounts Payable");
   if (!apAccountId) {
     throw new AccountingError("Accounts Payable system account not found for this company");
   }
 
   const description = `Purchase Bill ${input.billNo}`;
-  const lines: JournalLineInput[] = [{ account_id: purchasesAccountId, debit: input.subtotal, credit: 0, description }];
+  const lines: JournalLineInput[] = [];
 
-  if (input.taxAmount > 0) {
+  if (inventorySubtotal > 0) {
+    const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
+    if (!inventoryAccountId) {
+      throw new AccountingError("Inventory system account not found for this company");
+    }
+    lines.push({ account_id: inventoryAccountId, debit: inventorySubtotal, credit: 0, description });
+  }
+
+  if (nonInventorySubtotal > 0) {
+    const purchasesAccountId = await getSystemAccountByCategory(input.companyId, "Purchases");
+    if (!purchasesAccountId) {
+      throw new AccountingError("Purchases system account not found for this company");
+    }
+    lines.push({ account_id: purchasesAccountId, debit: nonInventorySubtotal, credit: 0, description });
+  }
+
+  if (totalTax > 0) {
     const inputGstAccountId = await getSystemAccountByCategory(input.companyId, "Input GST");
     if (!inputGstAccountId) {
       throw new AccountingError("Input GST system account not found for this company");
     }
-    lines.push({ account_id: inputGstAccountId, debit: input.taxAmount, credit: 0, description });
+    lines.push({ account_id: inputGstAccountId, debit: totalTax, credit: 0, description });
   }
 
-  const total = round2(input.subtotal + input.taxAmount);
+  const total = round2(inventorySubtotal + nonInventorySubtotal + totalTax);
   lines.push({ account_id: apAccountId, debit: 0, credit: total, description });
 
   return createJournalTx(conn, {
