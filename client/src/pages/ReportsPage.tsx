@@ -12,6 +12,7 @@ import {
   Customer,
   GeneralLedgerEntry,
   GeneralLedgerResult,
+  GstSummaryResult,
   LedgerAccountType,
   ProfitAndLossResult,
   ProfitAndLossRow,
@@ -371,21 +372,38 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
   );
 }
 
+// Built entirely from journals + journal_lines + chart_of_accounts via
+// /api/accounting/gst-summary (Phase 11A) - never from documents/expenses
+// directly. Input GST naturally includes both Purchase Bills and Expenses
+// (both post to the same 1151 Input GST account), fixing the legacy
+// report's Purchase-Bill-exclusion gap. Company selection follows the same
+// convention as every other ledger-based tab: defaults to the first
+// company and always sends an explicit company_id - no "All Companies"
+// blended-total option, since GST must be filed per-GSTIN/per-company.
 function GstSummaryTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("month"), dayjs()]);
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<{ outputCgst: number; outputSgst: number; outputIgst: number; outputTotal: number; inputGst: number; netPayable: number } | null>(null);
+  const [data, setData] = useState<GstSummaryResult | null>(null);
+
+  useEffect(() => {
+    if (companies.length && companyId === undefined) setCompanyId(companies[0].id);
+  }, [companies, companyId]);
 
   async function load() {
+    if (!companyId) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ from: range[0].format("YYYY-MM-DD"), to: range[1].format("YYYY-MM-DD") });
-      if (companyId) params.set("company_id", String(companyId));
-      const res = await api.get<typeof data>(`/reports/gst-summary?${params.toString()}`);
+      const params = new URLSearchParams({
+        company_id: String(companyId),
+        from: range[0].format("YYYY-MM-DD"),
+        to: range[1].format("YYYY-MM-DD"),
+      });
+      const res = await api.get<GstSummaryResult>(`/accounting/gst-summary?${params.toString()}`);
       setData(res);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "Failed to load GST summary");
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -400,8 +418,7 @@ function GstSummaryTab({ companies }: { companies: Company[] }) {
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
-          placeholder="All Companies"
-          allowClear
+          placeholder="Company"
           style={{ width: 200 }}
           value={companyId}
           options={companies.map((c) => ({ value: c.id, label: c.name }))}
@@ -411,44 +428,56 @@ function GstSummaryTab({ companies }: { companies: Company[] }) {
       </Space>
 
       {data && (
-        <Row gutter={16}>
-          <Col xs={12} md={6}>
-            <Card size="small" loading={loading}>
-              <Statistic title="Output CGST" value={data.outputCgst} precision={2} prefix="Rs." />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small" loading={loading}>
-              <Statistic title="Output SGST" value={data.outputSgst} precision={2} prefix="Rs." />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small" loading={loading}>
-              <Statistic title="Output IGST" value={data.outputIgst} precision={2} prefix="Rs." />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small" loading={loading}>
-              <Statistic title="Output GST Total" value={data.outputTotal} precision={2} prefix="Rs." />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small" loading={loading}>
-              <Statistic title="Input GST (Expenses)" value={data.inputGst} precision={2} prefix="Rs." />
-            </Card>
-          </Col>
-          <Col xs={12} md={6}>
-            <Card size="small" loading={loading}>
-              <Statistic
-                title="Net GST Payable"
-                value={data.netPayable}
-                precision={2}
-                prefix="Rs."
-                valueStyle={{ color: data.netPayable >= 0 ? "#cf1322" : "#3f8600" }}
-              />
-            </Card>
-          </Col>
-        </Row>
+        <>
+          <Row gutter={16}>
+            <Col xs={12} md={8}>
+              <Card size="small" loading={loading}>
+                <Statistic title="Input GST" value={data.inputGst} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={12} md={8}>
+              <Card size="small" loading={loading}>
+                <Statistic title="Output CGST" value={data.outputCgst} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={12} md={8}>
+              <Card size="small" loading={loading}>
+                <Statistic title="Output SGST" value={data.outputSgst} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={12} md={8}>
+              <Card size="small" loading={loading}>
+                <Statistic title="Output IGST" value={data.outputIgst} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={12} md={8}>
+              <Card size="small" loading={loading}>
+                <Statistic title="Total Output GST" value={data.totalOutputGst} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={12} md={8}>
+              <Card size="small" loading={loading}>
+                <Statistic
+                  title={data.netGst >= 0 ? "Net GST Payable" : "Net GST Refundable"}
+                  value={Math.abs(data.netGst)}
+                  precision={2}
+                  prefix="Rs."
+                  valueStyle={{ color: data.netGst >= 0 ? "#cf1322" : "#3f8600" }}
+                />
+              </Card>
+            </Col>
+          </Row>
+
+          {Math.abs(data.gstPayableAccountBalance) > 0.01 && (
+            <div style={{ marginTop: 12 }}>
+              <Tag color="orange">
+                GST Payable account (2120) carries its own balance of Rs. {formatMoney(Math.abs(data.gstPayableAccountBalance))}{" "}
+                - shown for transparency only; the Net GST figure above is always the computed Output − Input result, never
+                replaced by this account.
+              </Tag>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

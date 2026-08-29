@@ -579,3 +579,15 @@ export interface CashFlowResult {
   actualClosingCashBalance: number;
   reconciles: boolean;
 }
+
+export interface GstSummaryResult {
+  from: string;
+  to: string;
+  inputGst: number;
+  outputCgst: number;
+  outputSgst: number;
+  outputIgst: number;
+  totalOutputGst: number;
+  netGst: number;
+  gstPayableAccountBalance: number;
+}

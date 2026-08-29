@@ -7,6 +7,7 @@ import {
   getBalanceSheet,
   getCashFlowStatement,
   getGeneralLedger,
+  getGstSummary,
   getProfitAndLoss,
   getTrialBalance,
 } from "../services/accounting";
@@ -120,6 +121,23 @@ accountingReportsRouter.get(
     const { from, to } = dateRange(req.query);
 
     const result = await getCashFlowStatement(companyId, from, to);
+    res.json(result);
+  })
+);
+
+// GST Summary (Phase 11A) - built entirely from journals + journal_lines +
+// chart_of_accounts (see getGstSummary's doc comment), replacing the
+// legacy documents/expenses-based /api/reports/gst-summary query. Same
+// company-scoping-by-construction as trial-balance/profit-loss/balance-
+// sheet/cash-flow above.
+accountingReportsRouter.get(
+  "/gst-summary",
+  asyncHandler(async (req, res) => {
+    const companyId = req.query.company_id ? Number(req.query.company_id) : null;
+    if (!companyId) return res.status(400).json({ message: "company_id is required" });
+    const { from, to } = dateRange(req.query);
+
+    const result = await getGstSummary(companyId, from, to);
     res.json(result);
   })
 );

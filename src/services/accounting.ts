@@ -1388,3 +1388,98 @@ export async function getCashFlowStatement(companyId: number, from: string, to: 
     reconciles: Math.abs(closingCashBalance - actualClosingCashBalance) < 0.01,
   };
 }
+
+export interface GstSummaryResult {
+  from: string;
+  to: string;
+  inputGst: number;
+  outputCgst: number;
+  outputSgst: number;
+  outputIgst: number;
+  totalOutputGst: number;
+  /** Total Output GST - Input GST for this period. Positive = payable,
+   * negative = refundable. Always the computed figure below - never
+   * replaced by gstPayableAccountBalance. */
+  netGst: number;
+  /** The real 2120 GST Payable account's own cumulative balance as of `to`
+   * - shown for transparency only. Confirmed by Phase 11's audit that
+   * nothing in this codebase currently posts to this account, so it is
+   * expected to be 0 today; if it is ever nonzero (e.g. a future manual
+   * settlement journal), that fact is surfaced here rather than silently
+   * substituted for netGst above. */
+  gstPayableAccountBalance: number;
+}
+
+/**
+ * The period activity of one GST account: getAccountBalance(to) -
+ * getAccountOpeningBalance(from) - the same categoryDelta pattern
+ * getCashFlowStatement already uses for working-capital deltas. Since
+ * balance(to) sums every journal line with journal_date <= to and
+ * openingBalance(from) sums every line with journal_date < from, the
+ * difference is exactly the sum of journal lines with journal_date in
+ * [from, to] - using journals.journal_date, never created_at, and with no
+ * `status` filter anywhere (both primitives are already status-agnostic,
+ * so an original + its reversal net to exactly zero, and an edited
+ * transaction's old/new journals net to exactly the corrected figure).
+ * Returns 0 (not an error) when the company has no seeded account for this
+ * category, same defensive convention as getCashFlowStatement.
+ */
+async function gstAccountPeriodActivity(companyId: number, category: string, from: string, to: string): Promise<number> {
+  const accountId = await getSystemAccountByCategory(companyId, category);
+  if (!accountId) return 0;
+  const closing = await getAccountBalance(accountId, to);
+  const opening = await getAccountOpeningBalance(accountId, from);
+  return round2(closing - opening);
+}
+
+/**
+ * Ledger-based GST Summary (Phase 11A) - built entirely from journals +
+ * journal_lines + chart_of_accounts, replacing the legacy documents/
+ * expenses-based /api/reports/gst-summary query. Resolves every account by
+ * category via getSystemAccountByCategory (never a hardcoded id), so it is
+ * company-isolated the same structural way every other Phase 8-10 report
+ * is - there is no cross-company parameter for a mismatch to even be
+ * possible.
+ *
+ * Input GST here naturally includes BOTH Purchase Bills and Expenses,
+ * fixing the gap the audit found in the legacy report (which only ever
+ * summed expenses.tax_amount) - because both already post to the same
+ * 1151 Input GST account, a ledger read of that one account picks up
+ * everything by construction, with no source-table-specific logic needed.
+ *
+ * Output CGST/SGST/IGST are summed the same way from their own accounts
+ * (2121/2122/2123) - correctly reflecting only currently-active postings,
+ * so the Phase 11A cancellation fix (Tax Invoice/Purchase Bill cancel now
+ * reverses rather than leaving a stale posting) is what makes a cancelled
+ * document's GST correctly disappear from this report, not anything
+ * GST-Summary-specific.
+ *
+ * totalOutputGst and netGst are always the computed figures - the real,
+ * separately-seeded 2120 GST Payable account is surfaced only as
+ * gstPayableAccountBalance, a transparency figure, never substituted for
+ * netGst (Phase 11A's explicit requirement - see the audit's finding that
+ * nothing posts to 2120 today).
+ */
+export async function getGstSummary(companyId: number, from: string, to: string): Promise<GstSummaryResult> {
+  const inputGst = await gstAccountPeriodActivity(companyId, "Input GST", from, to);
+  const outputCgst = await gstAccountPeriodActivity(companyId, "Output CGST", from, to);
+  const outputSgst = await gstAccountPeriodActivity(companyId, "Output SGST", from, to);
+  const outputIgst = await gstAccountPeriodActivity(companyId, "Output IGST", from, to);
+  const totalOutputGst = round2(outputCgst + outputSgst + outputIgst);
+  const netGst = round2(totalOutputGst - inputGst);
+
+  const gstPayableAccountId = await getSystemAccountByCategory(companyId, "GST/Tax Payable");
+  const gstPayableAccountBalance = gstPayableAccountId ? await getAccountBalance(gstPayableAccountId, to) : 0;
+
+  return {
+    from,
+    to,
+    inputGst,
+    outputCgst,
+    outputSgst,
+    outputIgst,
+    totalOutputGst,
+    netGst,
+    gstPayableAccountBalance,
+  };
+}

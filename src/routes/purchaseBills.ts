@@ -391,6 +391,9 @@ purchaseBillsRouter.put(
         return res.status(400).json({ message: "Cannot edit a cancelled purchase bill" });
       }
 
+      const resolvedStatus =
+        status && ["draft", "received", "cancelled"].includes(status) ? status : existing.status;
+
       await conn.query(
         `UPDATE purchase_bills SET
            company_id = ?, vendor_id = ?, purchase_order_id = ?, status = ?, bill_date = ?, due_date = ?,
@@ -400,7 +403,7 @@ purchaseBillsRouter.put(
           req.body.company_id,
           vendor_id,
           purchase_order_id || null,
-          status && ["draft", "received", "cancelled"].includes(status) ? status : existing.status,
+          resolvedStatus,
           bill_date,
           due_date || null,
           reference_no || null,
@@ -441,24 +444,38 @@ purchaseBillsRouter.put(
       // this bill for the rest of the transaction, so a concurrent edit of
       // the same bill is already serialized by the time we get here - see
       // salesDocuments.ts's PUT handler for the identical reasoning.
+      //
+      // Phase 11A fix: cancelling used to reverse-then-*always repost* a
+      // fresh journal, even when the new status was 'cancelled' - so a
+      // "cancelled" purchase bill still carried a fully live Input GST/AP/
+      // Purchases posting, with zero accounting effect from the
+      // cancellation itself. Cancelling now reverses whatever journal is
+      // active and stops there - no replacement journal is posted. Every
+      // other edit (draft/received, or a cancelled bill's own figures being
+      // corrected before it's cancelled) keeps the existing reverse-then-
+      // repost behavior unchanged. The original and its reversal are both
+      // kept, never deleted, preserving the audit trail.
       const priorJournal = await getJournalBySource("purchase_bill", id);
       if (priorJournal) {
         await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
       }
-      const journal = await postPurchaseBillJournalTx(conn, {
-        companyId: Number(req.body.company_id),
-        billId: id,
-        billNo: existing.bill_no,
-        billDate: bill_date,
-        subtotal,
-        taxAmount,
-        createdBy: req.user!.sub,
-      });
+      const journal =
+        resolvedStatus === "cancelled"
+          ? null
+          : await postPurchaseBillJournalTx(conn, {
+              companyId: Number(req.body.company_id),
+              billId: id,
+              billNo: existing.bill_no,
+              billDate: bill_date,
+              subtotal,
+              taxAmount,
+              createdBy: req.user!.sub,
+            });
 
       await conn.commit();
       const updated = await findById(id);
       const items = await findItemsForBill(id);
-      res.json({ bill: updated, items, journal: { id: journal.id, status: journal.status } });
+      res.json({ bill: updated, items, journal: journal ? { id: journal.id, status: journal.status } : null });
     } catch (err) {
       await conn.rollback();
       if (err instanceof AccountingError) {

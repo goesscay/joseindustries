@@ -535,10 +535,53 @@ export function createSalesDocumentRouter(
       if (!allowed.includes(status)) {
         return res.status(400).json({ message: "Invalid status" });
       }
-      const existing = await findById(id);
-      if (!existing) return res.status(404).json({ message: `${title} not found` });
 
-      await pool.query("UPDATE documents SET status = ? WHERE id = ?", [status, id]);
+      // Phase 11A fix: a status change to 'cancelled' used to be a bare
+      // UPDATE with no accounting effect at all - a Tax Invoice's Output
+      // GST/Sales/AR journal stayed fully posted forever, even though the
+      // document itself now read "cancelled" (confirmed live during Phase
+      // 11's audit: Output CGST/SGST stayed at their full posted amount
+      // after cancelling). Cancelling now reverses whatever journal is
+      // currently active for this invoice, in the same transaction as the
+      // status update - if the reversal fails, the cancellation rolls back
+      // too. No replacement journal is posted for a cancelled invoice; the
+      // original (now status='reversed') and its reversal are both kept,
+      // never deleted, preserving the full audit trail exactly like the
+      // existing PUT/DELETE handlers already do. Every other status
+      // transition is unchanged - a bare UPDATE, no accounting involved,
+      // same as before.
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        const [existingRows] = await conn.query<any[]>(
+          "SELECT * FROM documents WHERE id = ? AND doc_type = ? FOR UPDATE",
+          [id, docType]
+        );
+        const existing = existingRows[0] as DocumentRecord | undefined;
+        if (!existing) {
+          await conn.rollback();
+          return res.status(404).json({ message: `${title} not found` });
+        }
+
+        if (docType === "tax_invoice" && status === "cancelled") {
+          const priorJournal = await getJournalBySource("tax_invoice", id);
+          if (priorJournal) {
+            await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+          }
+        }
+
+        await conn.query("UPDATE documents SET status = ? WHERE id = ?", [status, id]);
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback();
+        if (err instanceof AccountingError) {
+          return res.status(400).json({ message: `${title} could not be cancelled: ${err.message}` });
+        }
+        throw err;
+      } finally {
+        conn.release();
+      }
+
       const updated = await findById(id);
       res.json({ document: updated });
     })
