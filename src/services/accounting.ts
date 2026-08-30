@@ -519,6 +519,63 @@ export async function postTaxInvoiceJournalTx(conn: PoolConnection, input: PostT
   });
 }
 
+export interface PostSaleCogsJournalInput {
+  companyId: number;
+  invoiceId: number;
+  invoiceNo: string;
+  issueDate: string;
+  /** Sum of qty * unit_cost across every 'sale_issue' stock_transactions
+   * row this invoice actually posted (read directly from
+   * postDocumentStockMovementTx's own returned rows, never recomputed
+   * independently) - GST-exclusive by construction, since Phase 12C's
+   * unit_cost is always GST-exclusive. Callers must only invoke this when
+   * cogsAmount > 0 (createJournalTx/validateJournalLines reject an
+   * all-zero journal, same as postPurchaseBillJournalTx's own
+   * skip-the-zero-bucket behavior). */
+  cogsAmount: number;
+  createdBy: number | null;
+}
+
+/**
+ * Phase 12E: Dr Cost of Goods Sold (5100), Cr Inventory (1140) - the
+ * inventory-cost counterpart to postTaxInvoiceJournalTx's revenue/GST
+ * journal, posted as its OWN separate journal (see the Phase 12E audit's
+ * "Option B" decision) linked to the same invoice via a distinct
+ * source_type ("tax_invoice_cogs", not "tax_invoice") so
+ * getJournalBySource/reverseJournalTx work unmodified for both journals
+ * independently - reversing one never touches the other. This function
+ * has zero knowledge of selling price, GST, or which lines were
+ * tracked/skipped; it only ever receives the already-resolved cogsAmount,
+ * so "stock issue value = COGS value" holds by construction, not by
+ * parallel calculation - see the caller in salesDocuments.ts. Must run on
+ * a `conn` already inside the caller's transaction.
+ */
+export async function postSaleCogsJournalTx(conn: PoolConnection, input: PostSaleCogsJournalInput): Promise<Journal> {
+  const cogsAccountId = await getSystemAccountByCategory(input.companyId, "Cost of Goods Sold");
+  if (!cogsAccountId) {
+    throw new AccountingError("Cost of Goods Sold system account not found for this company");
+  }
+  const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
+  if (!inventoryAccountId) {
+    throw new AccountingError("Inventory system account not found for this company");
+  }
+
+  const description = `COGS for Tax Invoice ${input.invoiceNo}`;
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.issueDate,
+    reference: input.invoiceNo,
+    source_type: "tax_invoice_cogs",
+    source_id: input.invoiceId,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: cogsAccountId, debit: input.cogsAmount, credit: 0, description },
+      { account_id: inventoryAccountId, debit: 0, credit: input.cogsAmount, description },
+    ],
+  });
+}
+
 // ---- A note on `journals.status` and arithmetic -----------------------
 // A reversal is an OFFSETTING entry, not a retroactive void: posted
 // journals are immutable, so "correcting" one means posting a brand new

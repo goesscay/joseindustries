@@ -7,9 +7,37 @@ import { getNextDocNumber } from "../services/numbering";
 import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
-import { AccountingError, getJournalBySource, postTaxInvoiceJournalTx, reverseJournalTx } from "../services/accounting";
+import {
+  AccountingError,
+  getJournalBySource,
+  postSaleCogsJournalTx,
+  postTaxInvoiceJournalTx,
+  reverseJournalTx,
+} from "../services/accounting";
 import { InsufficientStockError, InventoryError, postDocumentStockMovementTx, reverseStockForSourceTx } from "../services/inventory";
-import { Company, Customer, DocType, DocumentItem, DocumentRecord, Journal, Role } from "../types";
+import { Company, Customer, DocType, DocumentItem, DocumentRecord, Journal, StockTransaction, Role } from "../types";
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Phase 12E: COGS = sum(qty * unit_cost) read directly from the
+ * stock_transactions rows postDocumentStockMovementTx just posted/returned
+ * - never recomputed via a second resolveSaleCost call - so "stock issue
+ * value = COGS value" holds by construction. unit_cost is nullable on the
+ * type (a purchase_receipt or opening entry can lack one) but every
+ * 'sale_issue' row always has one (resolveSaleCost never returns undefined,
+ * falling back to 0 with isFallback rather than leaving it unset) - the
+ * `?? 0` here is defensive, not a real fallback path.
+ */
+function computeCogsAmount(posted: StockTransaction[]): number {
+  return round2(
+    posted
+      .filter((t) => t.txn_type === "sale_issue")
+      .reduce((sum, t) => sum + Number(t.qty) * Number(t.unit_cost ?? 0), 0)
+  );
+}
 
 export interface SalesDocumentRouterOptions {
   /**
@@ -338,6 +366,7 @@ export function createSalesDocumentRouter(
         // since this same factory function is shared across all of them
         // and docType is the only thing distinguishing this call.
         let journal: Journal | undefined;
+        let cogsJournal: Journal | undefined;
         let stock: Awaited<ReturnType<typeof postDocumentStockMovementTx>> | undefined;
         if (docType === "tax_invoice") {
           journal = await postTaxInvoiceJournalTx(conn, {
@@ -368,6 +397,25 @@ export function createSalesDocumentRouter(
             createdBy: req.user!.sub,
             confirmNegativeStock: Boolean(confirm_negative_stock),
           });
+          // Phase 12E: COGS is its own separate journal (see the Phase 12E
+          // audit's "Option B" decision) - the revenue/GST journal just
+          // posted above is completely untouched by this. Computed from
+          // the stock rows just posted, never recomputed independently, so
+          // it can never disagree with the stock issue's own value. Only
+          // posted when nonzero (a 100% non-tracked invoice, or a fallback-
+          // to-0-cost sale, correctly posts no COGS journal at all - same
+          // "skip the zero bucket" rule postPurchaseBillJournalTx uses).
+          const cogsAmount = computeCogsAmount(stock.posted);
+          if (cogsAmount > 0) {
+            cogsJournal = await postSaleCogsJournalTx(conn, {
+              companyId: Number(company_id),
+              invoiceId: documentId,
+              invoiceNo: docNumber,
+              issueDate: issue_date,
+              cogsAmount,
+              createdBy: req.user!.sub,
+            });
+          }
         }
 
         await conn.commit();
@@ -377,6 +425,7 @@ export function createSalesDocumentRouter(
           document: created,
           items: docItems,
           journal: journal ? { id: journal.id, status: journal.status } : null,
+          cogsJournal: cogsJournal ? { id: cogsJournal.id, status: cogsJournal.status } : null,
           stock: stock ? { posted: stock.posted.length, skipped: stock.skipped, costFallbacks: stock.costFallbacks } : null,
         });
       } catch (err) {
@@ -534,6 +583,7 @@ export function createSalesDocumentRouter(
         // this mirrors, where the lock had to be taken explicitly first
         // because nothing else in that handler took one).
         let journal: Journal | undefined;
+        let cogsJournal: Journal | undefined;
         let stock: Awaited<ReturnType<typeof postDocumentStockMovementTx>> | undefined;
         if (docType === "tax_invoice") {
           const priorJournal = await getJournalBySource("tax_invoice", id);
@@ -552,6 +602,15 @@ export function createSalesDocumentRouter(
             igstTotal,
             createdBy: req.user!.sub,
           });
+          // Phase 12E: the COGS journal is reversed here too - independent
+          // of the revenue journal above (different source_type, its own
+          // reversal chain) - unconditionally, mirroring the revenue
+          // journal's own unconditional reverse-then-repost. A no-op if the
+          // prior edit's invoice had no tracked lines (nothing to reverse).
+          const priorCogsJournal = await getJournalBySource("tax_invoice_cogs", id);
+          if (priorCogsJournal) {
+            await reverseJournalTx(conn, priorCogsJournal.id, req.user!.sub);
+          }
           // Phase 12: same reverse-then-repost shape as the journal just
           // above - reverse whatever stock is currently active for this
           // invoice, then post fresh movements for the corrected lines
@@ -569,6 +628,20 @@ export function createSalesDocumentRouter(
             createdBy: req.user!.sub,
             confirmNegativeStock: Boolean(confirm_negative_stock),
           });
+          // Phase 12E: repost COGS from the FRESH stock rows just posted
+          // above - re-resolved against the post-reversal balance, exactly
+          // per the approved edit sequence (reverse, recalculate, repost).
+          const cogsAmount = computeCogsAmount(stock.posted);
+          if (cogsAmount > 0) {
+            cogsJournal = await postSaleCogsJournalTx(conn, {
+              companyId: Number(company_id),
+              invoiceId: id,
+              invoiceNo: existing.doc_number,
+              issueDate: issue_date,
+              cogsAmount,
+              createdBy: req.user!.sub,
+            });
+          }
         }
 
         await conn.commit();
@@ -578,6 +651,7 @@ export function createSalesDocumentRouter(
           document: updated,
           items: docItems,
           journal: journal ? { id: journal.id, status: journal.status } : null,
+          cogsJournal: cogsJournal ? { id: cogsJournal.id, status: cogsJournal.status } : null,
           stock: stock ? { posted: stock.posted.length, skipped: stock.skipped, costFallbacks: stock.costFallbacks } : null,
         });
       } catch (err) {
@@ -638,6 +712,13 @@ export function createSalesDocumentRouter(
           if (priorJournal) {
             await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
           }
+          // Phase 12E: reverse the COGS journal too - independent of the
+          // revenue journal above, no replacement posted, same "reverse
+          // only, never repost" rule extended to this second journal.
+          const priorCogsJournal = await getJournalBySource("tax_invoice_cogs", id);
+          if (priorCogsJournal) {
+            await reverseJournalTx(conn, priorCogsJournal.id, req.user!.sub);
+          }
           // Phase 12: cancelling reverses stock exactly like it reverses
           // the journal just above - no replacement stock transaction is
           // posted for a cancelled invoice, same "reverse only, never
@@ -692,6 +773,13 @@ export function createSalesDocumentRouter(
           const priorJournal = await getJournalBySource("tax_invoice", id);
           if (priorJournal) {
             await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+          }
+          // Phase 12E: a "draft" Tax Invoice already has real COGS effect
+          // too (same reasoning as the journal above - it posts at
+          // creation regardless of status) - reverse it here as well.
+          const priorCogsJournal = await getJournalBySource("tax_invoice_cogs", id);
+          if (priorCogsJournal) {
+            await reverseJournalTx(conn, priorCogsJournal.id, req.user!.sub);
           }
           // Phase 12: a "draft" Tax Invoice already has real stock effect
           // (stock posts unconditionally at creation, same timing as the
