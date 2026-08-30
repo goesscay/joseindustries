@@ -37,6 +37,20 @@ function formatQty(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatMoney(n: number): string {
+  return `Rs. ${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Renders an average-cost/inventory-value figure, or "—" when there is no
+ * cost basis at all (averageCost null) - never fabricates a 0. This is the
+ * ONLY place either figure is displayed; the number itself always comes
+ * from the backend's getStockValuation (via StockLevelRow), never
+ * recomputed here. */
+function renderCostOrDash(averageCost: number | null, value: number): JSX.Element | string {
+  if (averageCost === null) return <Typography.Text type="secondary">—</Typography.Text>;
+  return formatMoney(value);
+}
+
 /** Shared by all four Inventory pages - company list + the current
  * selection, defaulting to the first company, exactly like every other
  * report/page in this app (GstReturnsPage, ReportsPage) already does. */
@@ -106,11 +120,49 @@ export function StockLevelsPage() {
       render: (v: number) => (v >= 0 ? `+${formatQty(v)}` : formatQty(v)),
     },
     {
-      title: "Current On Hand",
+      title: "Qty On Hand",
       dataIndex: "currentOnHand",
       key: "currentOnHand",
       align: "right",
       render: (v: number) => <b style={{ color: v < 0 ? "#cf1322" : undefined }}>{formatQty(v)}</b>,
+    },
+    {
+      title: "Average Cost",
+      dataIndex: "averageCost",
+      key: "averageCost",
+      align: "right",
+      render: (v: number | null) => renderCostOrDash(v, v ?? 0),
+    },
+    {
+      title: "Inventory Value",
+      key: "inventoryValue",
+      align: "right",
+      render: (_, r) => {
+        // Distinguish "no cost basis at all" (averageCost null - nothing to
+        // show but a dash) from "partial cost basis" (averageCost is a real
+        // figure, but hasCostGap says it only covers part of currentOnHand,
+        // e.g. some quantity came from an uncosted manual adjustment) -
+        // both read straight off StockLevelRow, never computed here.
+        if (r.averageCost === null) {
+          return r.currentOnHand !== 0 ? (
+            <Tag color="default" title="On-hand quantity exists but no cost basis has ever been recorded for it">
+              no cost data
+            </Tag>
+          ) : (
+            <Typography.Text type="secondary">—</Typography.Text>
+          );
+        }
+        return (
+          <Space size={4}>
+            {formatMoney(r.inventoryValue)}
+            {r.hasCostGap && (
+              <Tag color="orange" title="Some on-hand quantity has no recorded cost basis - this value only covers the costed portion">
+                partial cost
+              </Tag>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: "Tracking",
@@ -122,12 +174,9 @@ export function StockLevelsPage() {
 
   return (
     <div>
-      <Typography.Title level={4} style={{ marginBottom: 4 }}>
+      <Typography.Title level={4} style={{ marginBottom: 16 }}>
         Stock Levels
       </Typography.Title>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        Quantity-only - no valuation or monetary stock figures are computed in this phase.
-      </Typography.Paragraph>
       <Space style={{ marginBottom: 16 }}>
         <Select
           placeholder="Company"
@@ -200,6 +249,28 @@ export function StockLedgerPage() {
     },
     { title: "Qty", dataIndex: "signedQty", key: "signedQty", align: "right", render: (v: number) => (v >= 0 ? `+${formatQty(v)}` : formatQty(v)) },
     { title: "Running Balance", dataIndex: "runningBalance", key: "runningBalance", align: "right", render: formatQty },
+    {
+      // The row's own stored cost - see StockLedgerRow.unitCost's doc
+      // comment - never today's average, and a reversal row already
+      // carries over the exact same cost as the row it reverses.
+      title: "Unit Cost",
+      dataIndex: "unitCost",
+      key: "unitCost",
+      align: "right",
+      render: (v: number | null) => (v === null ? <Typography.Text type="secondary">—</Typography.Text> : formatMoney(v)),
+    },
+    {
+      title: "Value Impact",
+      dataIndex: "valueImpact",
+      key: "valueImpact",
+      align: "right",
+      render: (v: number | null) =>
+        v === null ? (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ) : (
+          <span style={{ color: v < 0 ? "#cf1322" : undefined }}>{v >= 0 ? `+${formatMoney(v)}` : formatMoney(v)}</span>
+        ),
+    },
     { title: "Source", key: "source", render: (_, r) => (r.sourceType ? `${r.sourceType} #${r.sourceId ?? ""}` : "-") },
     { title: "Notes", dataIndex: "notes", key: "notes" },
   ];

@@ -702,6 +702,16 @@ export interface StockLevelRow {
   stockOut: number;
   adjustments: number;
   currentOnHand: number;
+  /** Phase 12F: the valuation fields below are read STRAIGHT from
+   * getStockValuation - the single Phase 12C source of truth for weighted-
+   * average cost - never recomputed here. See that function's own doc
+   * comment for exactly what each field means (in particular:
+   * averageCost is null, never fabricated as 0, when costedQty is zero;
+   * hasCostGap flags when currentOnHand and costedQty disagree). */
+  costedQty: number;
+  averageCost: number | null;
+  inventoryValue: number;
+  hasCostGap: boolean;
 }
 
 /**
@@ -712,6 +722,12 @@ export interface StockLevelRow {
  * always reconciles exactly to currentOnHand (computed the same way
  * getStockBalance does, independently, as a defensive cross-check rather
  * than trusting the four-bucket arithmetic alone).
+ *
+ * Phase 12F: also calls getStockValuation (current, no asOfDate - a Stock
+ * Levels view is always "as of now") once per item, in parallel, so the
+ * valuation columns are exactly what getStockValuation itself would report
+ * for that item - no second weighted-average algorithm is introduced here
+ * or anywhere else in this phase.
  */
 export async function getStockLevels(companyId: number): Promise<StockLevelRow[]> {
   const [items] = await pool.query<any[]>(
@@ -732,12 +748,15 @@ export async function getStockLevels(companyId: number): Promise<StockLevelRow[]
     byItem.set(r.item_id, bucket);
   }
 
-  return items.map((item) => {
+  const valuations = await Promise.all(items.map((item) => getStockValuation(pool, companyId, item.id)));
+
+  return items.map((item, i) => {
     const bucket = byItem.get(item.id) || {};
     const openingQty = round2(bucket["opening"] || 0);
     const stockIn = round2(bucket["purchase_receipt"] || 0);
     const stockOut = round2(bucket["sale_issue"] || 0);
     const adjustments = round2((bucket["adjustment_in"] || 0) - (bucket["adjustment_out"] || 0));
+    const valuation = valuations[i];
     return {
       itemId: item.id,
       itemName: item.name,
@@ -749,6 +768,10 @@ export async function getStockLevels(companyId: number): Promise<StockLevelRow[]
       stockOut,
       adjustments,
       currentOnHand: round2(openingQty + stockIn - stockOut + adjustments),
+      costedQty: valuation.costedQty,
+      averageCost: valuation.averageCost,
+      inventoryValue: valuation.totalValue,
+      hasCostGap: valuation.hasCostGap,
     };
   });
 }
@@ -765,6 +788,19 @@ export interface StockLedgerRow {
   reversesTxnId: number | null;
   notes: string | null;
   runningBalance: number;
+  /** Phase 12F: the row's own stored unit_cost - null when this specific
+   * transaction was never given a cost (e.g. a purchase_receipt entered
+   * with no rate, or a pre-Phase-12C row). NEVER recomputed from today's
+   * weighted average - a reversal row already carries over the EXACT SAME
+   * unit_cost as the row it reverses (see reverseOneStockTransactionTx),
+   * so this column is correct for historical rows without any extra work
+   * here. */
+  unitCost: number | null;
+  /** signedQty * unitCost, or null when unitCost is null - never a
+   * fabricated 0. This is the row's own value contribution, not a running
+   * total (see StockLevelRow.inventoryValue / getStockValuation for the
+   * running book value). */
+  valueImpact: number | null;
 }
 
 /**
@@ -795,6 +831,7 @@ export async function getStockLedger(
   const ledgerRows: StockLedgerRow[] = rows.map((r) => {
     const signedQty = signFor(r.txn_type as StockTxnType) * Number(r.qty);
     running = round2(running + signedQty);
+    const unitCost = r.unit_cost === null || r.unit_cost === undefined ? null : Number(r.unit_cost);
     return {
       id: r.id,
       txnDate: r.txn_date,
@@ -807,6 +844,8 @@ export async function getStockLedger(
       reversesTxnId: r.reverses_txn_id,
       notes: r.notes,
       runningBalance: running,
+      unitCost,
+      valueImpact: unitCost === null ? null : round2(signedQty * unitCost),
     };
   });
 

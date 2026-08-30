@@ -698,6 +698,13 @@ export interface StockLevelRow {
   stockOut: number;
   adjustments: number;
   currentOnHand: number;
+  /** Phase 12F: read straight from the backend's getStockValuation - the
+   * single Phase 12C source of truth. averageCost is null (never 0) when
+   * there is no cost basis at all; hasCostGap flags a partial/no cost basis. */
+  costedQty: number;
+  averageCost: number | null;
+  inventoryValue: number;
+  hasCostGap: boolean;
 }
 
 export interface StockLedgerRow {
@@ -712,6 +719,10 @@ export interface StockLedgerRow {
   reversesTxnId: number | null;
   notes: string | null;
   runningBalance: number;
+  /** Phase 12F: the row's own stored unit_cost (never today's average). */
+  unitCost: number | null;
+  /** signedQty * unitCost, or null when unitCost is null. */
+  valueImpact: number | null;
 }
 
 export interface StockLedgerResult {
