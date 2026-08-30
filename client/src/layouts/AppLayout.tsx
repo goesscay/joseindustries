@@ -181,16 +181,17 @@ export function AppLayout() {
                 { key: "/reports/receivables", icon: <WalletOutlined />, label: comingSoonLabel("Receivables"), disabled: true },
                 { key: "/reports/payables", icon: <MoneyCollectOutlined />, label: comingSoonLabel("Payables"), disabled: true },
                 { key: "/reports/banking", icon: <CreditCardOutlined />, label: comingSoonLabel("Banking"), disabled: true },
-                { key: "/reports/inventory", icon: <DatabaseOutlined />, label: comingSoonLabel("Inventory"), disabled: true },
-                // Financial Reports and GST Returns are the two enabled
-                // items in this group - both real destinations (the
-                // existing /reports page with GL/Trial Balance/Balance
-                // Sheet/Cash Flow/GST Summary tabs, and the Phase 11B GST
-                // Returns preparation page). The remaining placeholders
-                // above stay disabled - unimplemented, per their own
-                // phase's scope.
+                // Financial Reports, GST Returns, and Inventory Valuation
+                // are the three enabled items in this group - all real
+                // destinations (the existing /reports page with GL/Trial
+                // Balance/Balance Sheet/Cash Flow/GST Summary tabs, the
+                // Phase 11B GST Returns preparation page, and the Phase 12F
+                // point-in-time inventory valuation report). The remaining
+                // placeholders above stay disabled - unimplemented, per
+                // their own phase's scope.
                 { key: "/reports", icon: <BarChartOutlined />, label: "Financial Reports" },
                 { key: "/reports/gst-returns", icon: <PercentageOutlined />, label: "GST Returns" },
+                { key: "/reports/inventory", icon: <DatabaseOutlined />, label: "Inventory Valuation" },
               ],
             },
             {

@@ -707,6 +707,27 @@ export interface StockLevelRow {
   hasCostGap: boolean;
 }
 
+export interface InventoryValuationRow {
+  itemId: number;
+  itemName: string;
+  hsnCode: string | null;
+  unit: string;
+  qty: number;
+  costedQty: number;
+  averageCost: number | null;
+  inventoryValue: number;
+  hasCostGap: boolean;
+}
+
+export interface InventoryValuationResult {
+  asOfDate: string;
+  rows: InventoryValuationRow[];
+  totalQty: number;
+  totalCostedQty: number;
+  totalValue: number;
+  hasAnyCostGap: boolean;
+}
+
 export interface StockLedgerRow {
   id: number;
   txnDate: string;

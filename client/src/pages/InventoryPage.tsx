@@ -29,6 +29,8 @@ import {
   StockLedgerRow,
   StockTransaction,
   InsufficientStockItem,
+  InventoryValuationResult,
+  InventoryValuationRow,
 } from "../types";
 
 const { RangePicker } = DatePicker;
@@ -195,6 +197,155 @@ export function StockLevelsPage() {
         pagination={false}
         locale={{ emptyText: "No stock-tracked items yet - enable \"Track Stock\" on an item first" }}
       />
+    </div>
+  );
+}
+
+// ---- Inventory Valuation (/reports/inventory) ----
+//
+// A dedicated point-in-time report, distinct from Stock Levels (which is
+// always "as of now" and organized around movement reconciliation). Every
+// figure here comes straight from GET /inventory/valuation, which itself
+// is a thin wrapper around getStockValuation (Phase 12C) - there is no
+// second weighted-average calculation in this component; it only renders
+// what the backend already computed.
+
+export function InventoryValuationPage() {
+  const { companies, companyId, setCompanyId } = useCompanySelector();
+  const [asOfDate, setAsOfDate] = useState<Dayjs>(dayjs());
+  const [result, setResult] = useState<InventoryValuationResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function load(id: number, date: Dayjs) {
+    setLoading(true);
+    try {
+      const res = await api.get<InventoryValuationResult>(
+        `/inventory/valuation?company_id=${id}&as_of=${date.format("YYYY-MM-DD")}`
+      );
+      setResult(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load inventory valuation");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (companyId) load(companyId, asOfDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, asOfDate]);
+
+  const columns: ColumnsType<InventoryValuationRow> = [
+    { title: "Item", dataIndex: "itemName", key: "itemName" },
+    { title: "HSN/SAC", dataIndex: "hsnCode", key: "hsnCode", render: (v: string | null) => v || "-" },
+    { title: "Unit", dataIndex: "unit", key: "unit" },
+    { title: "Quantity", dataIndex: "qty", key: "qty", align: "right", render: (v: number) => <b style={{ color: v < 0 ? "#cf1322" : undefined }}>{formatQty(v)}</b> },
+    { title: "Costed Quantity", dataIndex: "costedQty", key: "costedQty", align: "right", render: formatQty },
+    {
+      title: "Average Cost",
+      dataIndex: "averageCost",
+      key: "averageCost",
+      align: "right",
+      render: (v: number | null) => renderCostOrDash(v, v ?? 0),
+    },
+    {
+      title: "Inventory Value",
+      key: "inventoryValue",
+      align: "right",
+      render: (_, r) => {
+        if (r.averageCost === null) {
+          return r.qty !== 0 ? (
+            <Tag color="default" title="Quantity exists but no cost basis has ever been recorded for it">
+              no cost data
+            </Tag>
+          ) : (
+            <Typography.Text type="secondary">—</Typography.Text>
+          );
+        }
+        return (
+          <Space size={4}>
+            {formatMoney(r.inventoryValue)}
+            {r.hasCostGap && (
+              <Tag color="orange" title="Some quantity has no recorded cost basis - this value only covers the costed portion">
+                partial cost
+              </Tag>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
+
+  return (
+    <div>
+      <Typography.Title level={4} style={{ marginBottom: 4 }}>
+        Inventory Valuation
+      </Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+        Point-in-time weighted-average valuation as of the selected date - never a fabricated cost for quantity with no
+        recorded cost basis.
+      </Typography.Paragraph>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Select
+          placeholder="Company"
+          style={{ width: 220 }}
+          value={companyId}
+          options={companies.map((c) => ({ value: c.id, label: c.name }))}
+          onChange={setCompanyId}
+        />
+        <DatePicker
+          value={asOfDate}
+          format="DD MMM YYYY"
+          allowClear={false}
+          onChange={(v) => v && setAsOfDate(v)}
+        />
+      </Space>
+
+      {result && (
+        <>
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col xs={12} md={6}>
+              <Card size="small">
+                <Statistic title="Total Quantity" value={result.totalQty} precision={2} />
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small">
+                <Statistic title="Total Costed Quantity" value={result.totalCostedQty} precision={2} />
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small">
+                <Statistic title="Total Inventory Value" value={result.totalValue} precision={2} prefix="Rs." />
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small">
+                <Typography.Text type="secondary" style={{ fontSize: 14 }}>
+                  Cost Basis
+                </Typography.Text>
+                <div style={{ marginTop: 4 }}>
+                  {result.hasAnyCostGap ? (
+                    <Tag color="orange">Some stock uncosted</Tag>
+                  ) : (
+                    <Tag color="green">Fully costed</Tag>
+                  )}
+                </div>
+              </Card>
+            </Col>
+          </Row>
+          <Table
+            rowKey="itemId"
+            columns={columns}
+            dataSource={result.rows}
+            loading={loading}
+            size="small"
+            pagination={false}
+            locale={{ emptyText: "No stock-tracked items yet - enable \"Track Stock\" on an item first" }}
+          />
+        </>
+      )}
     </div>
   );
 }

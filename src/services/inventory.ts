@@ -776,6 +776,87 @@ export async function getStockLevels(companyId: number): Promise<StockLevelRow[]
   });
 }
 
+export interface InventoryValuationRow {
+  itemId: number;
+  itemName: string;
+  hsnCode: string | null;
+  unit: string;
+  /** On-hand quantity as of the requested date - identical to
+   * getStockValuation's own totalQty for this (company, item, asOfDate). */
+  qty: number;
+  costedQty: number;
+  averageCost: number | null;
+  inventoryValue: number;
+  hasCostGap: boolean;
+}
+
+export interface InventoryValuationResult {
+  asOfDate: string;
+  rows: InventoryValuationRow[];
+  totalQty: number;
+  totalCostedQty: number;
+  totalValue: number;
+  /** True when at least one row has hasCostGap - a company-wide summary
+   * flag, never hiding which individual rows are affected (still visible
+   * per-row via InventoryValuationRow.hasCostGap). */
+  hasAnyCostGap: boolean;
+}
+
+/**
+ * Point-in-time inventory valuation for every stock-tracked item in a
+ * company, as of a given date (inclusive) - the dedicated valuation report
+ * distinct from getStockLevels (a movement/reconciliation view that is
+ * always "as of now"). This is a thin wrapper: it calls getStockValuation
+ * (Phase 12C) once per item with the requested asOfDate, exactly the same
+ * function getStockLevels itself calls, so both reports can never disagree
+ * about what a given item's valuation is on a given date - there is no
+ * second weighted-average calculation anywhere in this function.
+ *
+ * Every stock-tracked item is included regardless of quantity - a zero-
+ * quantity or zero-value item still gets a row (0.00, not omitted), since
+ * "no stock as of this date" is itself meaningful information, not an
+ * error. averageCost is null (never fabricated as 0) whenever costedQty is
+ * zero; the row's inventoryValue is then also correctly 0 (totalValue from
+ * getStockValuation), not left undefined.
+ */
+export async function getInventoryValuation(companyId: number, asOfDate: string): Promise<InventoryValuationResult> {
+  // items has no company_id column (a single shared catalog across
+  // companies, same as getStockLevels' own query above) - company scoping
+  // for valuation happens entirely inside getStockValuation, which filters
+  // stock_transactions by company_id. An item with zero activity for THIS
+  // company still gets a row here (qty 0, averageCost null), correctly
+  // reflecting "not stocked by this company", not omitted.
+  const [items] = await pool.query<any[]>(
+    "SELECT id, name, unit, hsn_code FROM items WHERE track_inventory = 1 ORDER BY name ASC"
+  );
+
+  const valuations = await Promise.all(items.map((item) => getStockValuation(pool, companyId, item.id, asOfDate)));
+
+  const rows: InventoryValuationRow[] = items.map((item, i) => {
+    const v = valuations[i];
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      hsnCode: item.hsn_code,
+      unit: item.unit,
+      qty: v.totalQty,
+      costedQty: v.costedQty,
+      averageCost: v.averageCost,
+      inventoryValue: v.totalValue,
+      hasCostGap: v.hasCostGap,
+    };
+  });
+
+  return {
+    asOfDate,
+    rows,
+    totalQty: round2(rows.reduce((s, r) => s + r.qty, 0)),
+    totalCostedQty: round2(rows.reduce((s, r) => s + r.costedQty, 0)),
+    totalValue: round2(rows.reduce((s, r) => s + r.inventoryValue, 0)),
+    hasAnyCostGap: rows.some((r) => r.hasCostGap),
+  };
+}
+
 export interface StockLedgerRow {
   id: number;
   txnDate: string;

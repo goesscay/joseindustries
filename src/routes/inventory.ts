@@ -5,6 +5,7 @@ import { asyncHandler } from "../utils/asyncHandler";
 import {
   InsufficientStockError,
   InventoryError,
+  getInventoryValuation,
   getStockLedger,
   getStockLevels,
   postAdjustmentTx,
@@ -35,6 +36,24 @@ inventoryRouter.get(
     if (!companyId) return res.status(400).json({ message: "company_id is required" });
     const rows = await getStockLevels(companyId);
     res.json({ data: rows });
+  })
+);
+
+// Phase 12F: dedicated point-in-time valuation report - distinct from
+// /stock-levels (a movement/reconciliation view always "as of now"). Same
+// `as_of` query-param convention accountingReports.ts already uses for
+// trial-balance/balance-sheet (defaults to today when omitted). Delegates
+// entirely to getInventoryValuation, which itself delegates to
+// getStockValuation per item - no valuation logic lives in this route.
+inventoryRouter.get(
+  "/valuation",
+  asyncHandler(async (req, res) => {
+    const companyId = req.query.company_id ? Number(req.query.company_id) : null;
+    if (!companyId) return res.status(400).json({ message: "company_id is required" });
+    const asOfDate =
+      typeof req.query.as_of === "string" && req.query.as_of ? req.query.as_of : new Date().toISOString().slice(0, 10);
+    const result = await getInventoryValuation(companyId, asOfDate);
+    res.json(result);
   })
 );
 
