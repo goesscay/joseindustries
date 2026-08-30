@@ -10,6 +10,7 @@ import {
   getStockLevels,
   postAdjustmentTx,
   postOpeningStockTx,
+  reverseAdjustmentTx,
 } from "../services/inventory";
 
 // Phase 12: Inventory & Stock Management - quantity-only. Gated by its own
@@ -79,7 +80,7 @@ inventoryRouter.post(
       return res.status(400).json({ message: "company_id, item_id, txn_date and qty are required" });
     }
     try {
-      const txn = await postOpeningStockTx({
+      const { stockTxn, journal } = await postOpeningStockTx({
         companyId: Number(company_id),
         itemId: Number(item_id),
         txnDate: txn_date,
@@ -88,7 +89,10 @@ inventoryRouter.post(
         notes: notes || null,
         createdBy: req.user!.sub,
       });
-      res.status(201).json({ transaction: txn });
+      res.status(201).json({
+        transaction: stockTxn,
+        journal: journal ? { id: journal.id, status: journal.status } : null,
+      });
     } catch (err) {
       if (err instanceof InventoryError) {
         return res.status(err.status).json({ message: err.message });
@@ -110,7 +114,7 @@ inventoryRouter.post(
       return res.status(400).json({ message: "txn_type must be 'adjustment_in' or 'adjustment_out'" });
     }
     try {
-      const txn = await postAdjustmentTx({
+      const { stockTxn, journal, costFallback } = await postAdjustmentTx({
         companyId: Number(company_id),
         itemId: Number(item_id),
         txnDate: txn_date,
@@ -120,11 +124,50 @@ inventoryRouter.post(
         createdBy: req.user!.sub,
         confirmNegativeStock: Boolean(confirm_negative_stock),
       });
-      res.status(201).json({ transaction: txn });
+      res.status(201).json({
+        transaction: stockTxn,
+        journal: journal ? { id: journal.id, status: journal.status } : null,
+        // Explicit, never silent - see postAdjustmentTx's own doc comment:
+        // true means the item had no cost basis at all, so unit_cost fell
+        // back to 0 and no journal was posted (the zero bucket is skipped),
+        // exactly the same contract Purchase Bill/Tax Invoice posting
+        // already surfaces via their own costFallbacks/costFallback fields.
+        costFallback,
+      });
     } catch (err) {
       if (err instanceof InsufficientStockError) {
         return res.status(err.status).json({ message: err.message, code: "INSUFFICIENT_STOCK", items: err.items });
       }
+      if (err instanceof InventoryError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      throw err;
+    }
+  })
+);
+
+// Phase 12G: reverses one specific adjustment (addressed by its own
+// stock_transactions id, not a source_type/source_id pair - adjustments
+// have no parent document to group by). Reverses both the stock row and
+// its accompanying journal (if the original adjustment posted one)
+// atomically - see reverseAdjustmentTx's own doc comment. Never deletes
+// either row; posts an offsetting reversal and marks the original
+// 'reversed', the same audit-trail-preserving convention as every other
+// reversal in this codebase.
+inventoryRouter.post(
+  "/adjustments/:id/reverse",
+  requireModuleAccess("inventory.stock", "delete"),
+  asyncHandler(async (req, res) => {
+    const companyId = req.body?.company_id ? Number(req.body.company_id) : null;
+    if (!companyId) return res.status(400).json({ message: "company_id is required" });
+    const id = Number(req.params.id);
+    try {
+      const { stockTxn, journal } = await reverseAdjustmentTx(companyId, id, req.user!.sub);
+      res.json({
+        transaction: stockTxn,
+        journal: journal ? { id: journal.id, status: journal.status } : null,
+      });
+    } catch (err) {
       if (err instanceof InventoryError) {
         return res.status(err.status).json({ message: err.message });
       }

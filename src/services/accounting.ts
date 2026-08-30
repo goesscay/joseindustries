@@ -576,6 +576,129 @@ export async function postSaleCogsJournalTx(conn: PoolConnection, input: PostSal
   });
 }
 
+export interface PostOpeningStockJournalInput {
+  companyId: number;
+  /** The opening `stock_transactions` row's own id - used as this
+   * journal's source_id (source_type "opening_stock") so it is
+   * independently discoverable via getJournalBySource, the same way every
+   * other posting function's journal is, even though no reversal endpoint
+   * currently calls it back (see postOpeningStockTx's own doc comment on
+   * why there is no "reverse opening stock" endpoint in this phase). */
+  stockTxnId: number;
+  txnDate: string;
+  /** qty * unitCost, already computed by the caller. Callers must only
+   * invoke this when amount > 0 - the caller's own responsibility is to
+   * skip this call entirely when the opening entry has no cost basis
+   * (unitCost null/undefined), never to call this with a fabricated 0. */
+  amount: number;
+  createdBy: number | null;
+}
+
+/**
+ * Phase 12G: Dr Inventory (1140), Cr Capital (3100) - opening stock's own
+ * asset value has to be represented somewhere on the books alongside the
+ * quantity (Phase 12/12C only ever recorded stock_transactions - no
+ * journal, no GL effect), and Capital is the approved offset (an
+ * explicit design decision - never Retained Earnings 3200, which
+ * getBalanceSheet treats as a purely computed row with no real postings
+ * of its own; posting here would double-count against that computation).
+ * Only ever called when the opening entry actually has a resolvable
+ * cost - see postOpeningStockTx's caller-side `if (unitCost)` guard.
+ * Must run on a `conn` already inside the caller's transaction, so the
+ * stock row and its journal commit or roll back together atomically.
+ */
+export async function postOpeningStockJournalTx(conn: PoolConnection, input: PostOpeningStockJournalInput): Promise<Journal> {
+  const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
+  if (!inventoryAccountId) {
+    throw new AccountingError("Inventory system account not found for this company");
+  }
+  const capitalAccountId = await getSystemAccountByCategory(input.companyId, "Capital");
+  if (!capitalAccountId) {
+    throw new AccountingError("Capital system account not found for this company");
+  }
+
+  const description = `Opening stock valuation (stock txn #${input.stockTxnId})`;
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.txnDate,
+    reference: null,
+    source_type: "opening_stock",
+    source_id: input.stockTxnId,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: inventoryAccountId, debit: input.amount, credit: 0, description },
+      { account_id: capitalAccountId, debit: 0, credit: input.amount, description },
+    ],
+  });
+}
+
+export interface PostStockAdjustmentJournalInput {
+  companyId: number;
+  /** The adjustment `stock_transactions` row's own id - this journal's
+   * source_id (source_type "stock_adjustment", distinct from the stock
+   * row's own source_type "adjustment" - the same tax_invoice /
+   * tax_invoice_cogs split Phase 12E already established for exactly this
+   * reason: one business event, two independently-reversible postings,
+   * disambiguated by source_type, sharing the same source_id). */
+  stockTxnId: number;
+  txnDate: string;
+  txnType: "adjustment_in" | "adjustment_out";
+  /** qty * the WAC-resolved unit cost (see resolveSaleCost - the SAME
+   * function sale_issue already uses, reused here rather than a second
+   * costing algorithm). Callers must only invoke this when amount > 0 -
+   * the zero-cost-fallback case (isFallback true) posts no journal at
+   * all, mirroring postSaleCogsJournalTx's own "only call when > 0" rule. */
+  amount: number;
+  createdBy: number | null;
+}
+
+/**
+ * Phase 12G: values a manual stock adjustment at the current weighted-
+ * average cost and posts it to the ledger - adjustment_in (found stock,
+ * stocktake increase) is Dr Inventory / Cr Other Expenses (5900) - a
+ * gain, reducing that period's expense; adjustment_out (loss, damage,
+ * shrinkage) is the reverse, Dr Other Expenses / Cr Inventory. Other
+ * Expenses (5900) is the same "safe universal fallback" bucket
+ * resolveExpenseAccountId already uses elsewhere in this file - not a
+ * new account, and not a dedicated "Inventory Shrinkage" category (none
+ * is seeded, and adding one is a schema change this phase does not need).
+ * Must run on a `conn` already inside the caller's transaction.
+ */
+export async function postStockAdjustmentJournalTx(conn: PoolConnection, input: PostStockAdjustmentJournalInput): Promise<Journal> {
+  const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
+  if (!inventoryAccountId) {
+    throw new AccountingError("Inventory system account not found for this company");
+  }
+  const otherExpensesAccountId = await getSystemAccountByCategory(input.companyId, "Other Expenses");
+  if (!otherExpensesAccountId) {
+    throw new AccountingError("Other Expenses system account not found for this company");
+  }
+
+  const description = `Stock adjustment (${input.txnType === "adjustment_in" ? "increase" : "decrease"}) - stock txn #${input.stockTxnId}`;
+  const lines: JournalLineInput[] =
+    input.txnType === "adjustment_in"
+      ? [
+          { account_id: inventoryAccountId, debit: input.amount, credit: 0, description },
+          { account_id: otherExpensesAccountId, debit: 0, credit: input.amount, description },
+        ]
+      : [
+          { account_id: otherExpensesAccountId, debit: input.amount, credit: 0, description },
+          { account_id: inventoryAccountId, debit: 0, credit: input.amount, description },
+        ];
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.txnDate,
+    reference: null,
+    source_type: "stock_adjustment",
+    source_id: input.stockTxnId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
 // ---- A note on `journals.status` and arithmetic -----------------------
 // A reversal is an OFFSETTING entry, not a retroactive void: posted
 // journals are immutable, so "correcting" one means posting a brand new

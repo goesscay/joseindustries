@@ -1,6 +1,13 @@
 import { Pool, PoolConnection } from "mysql2/promise";
 import { pool } from "../config/db";
-import { Item, StockTransaction, StockTxnType } from "../types";
+import { Item, Journal, StockTransaction, StockTxnType } from "../types";
+import {
+  AccountingError,
+  getJournalBySource,
+  postOpeningStockJournalTx,
+  postStockAdjustmentJournalTx,
+  reverseJournalTx,
+} from "./accounting";
 
 // Phase 12: Inventory & Stock Management - quantity-only stock ledger.
 //
@@ -8,10 +15,14 @@ import { Item, StockTransaction, StockTxnType } from "../types";
 // journal/reversal shape as closely as possible (see stock_transactions'
 // own schema.sql comment): immutable rows, correction-by-reversal, a
 // company-scoped ledger summed by SIGN-BY-TYPE rather than a signed qty
-// column. This file has NO relationship to accounting.ts - no journal, no
-// journal_lines, no COGS/Inventory GL posting - by design, per the Phase
-// 12A audit's recommended smallest production-safe scope. A future
-// valuation phase may wire the two together; this one does not.
+// column. Through Phase 12F this file had NO relationship to accounting.ts
+// for its own manual entry points (Purchase Bill/Tax Invoice postings in
+// 12D/12E live in their own routers, calling both services side by side -
+// this file itself stayed decoupled). Phase 12G wires opening stock and
+// manual adjustments to the ledger too (see postOpeningStockTx/
+// postAdjustmentTx below) - the last two of the four stock-movement entry
+// points to gain GL representation, using the exact same WAC/reversal
+// primitives already established here, never a second costing algorithm.
 
 /** Thrown for any inventory-rule violation. Routes catch this and respond
  * 400 with `.message`, mirroring AccountingError's contract exactly. */
@@ -351,8 +362,14 @@ export async function postStockTransactionTx(
  * the average happens to be now (which may have shifted from later
  * purchases) - the value-side equivalent of a journal reversal swapping
  * debit/credit for the SAME amount, never a recalculated one.
+ *
+ * Phase 12G: exported (previously private, used only by
+ * reverseStockForSourceTx below) so reverseAdjustmentTx can reuse this
+ * exact same primitive for a single stock_transactions row addressed
+ * directly by id, rather than by source_type/source_id - no reversal
+ * logic is duplicated for that new caller.
  */
-async function reverseOneStockTransactionTx(
+export async function reverseOneStockTransactionTx(
   conn: PoolConnection,
   txn: StockTransaction,
   userId: number | null
@@ -567,6 +584,15 @@ export interface OpeningStockInput {
   createdBy: number | null;
 }
 
+export interface PostOpeningStockResult {
+  stockTxn: StockTransaction;
+  /** The Dr Inventory / Cr Capital journal (Phase 12G), or null when no
+   * cost basis was given - never fabricated, exactly mirroring how a
+   * cost-less opening entry already contributes nothing to
+   * getStockValuation's costedQty/totalValue. */
+  journal: Journal | null;
+}
+
 /**
  * Posts a company/item's opening stock balance - manual, one-time, NEVER
  * inferred from historical documents (the Phase 12A audit confirmed there
@@ -576,8 +602,22 @@ export interface OpeningStockInput {
  * correction must explicitly reverse the original first (via a
  * compensating adjustment - see the route/module doc comment for why there
  * is no dedicated "reverse opening stock" endpoint in this phase).
+ *
+ * Phase 12G: when a valid (positive) unitCost is given, also posts Dr
+ * Inventory (1140) / Cr Capital (3100) for qty * unitCost, atomically in
+ * the same transaction as the stock row - the opening entry's asset value
+ * now actually appears on the books, not just in valuation reports. A
+ * cost-less opening entry posts no journal at all (same "never fabricate"
+ * rule as everywhere else in this file) - the stock quantity is still
+ * recorded exactly as before this phase. There is still no reversal
+ * endpoint for this journal (matching the stock row's own established
+ * policy above), so no duplicate/orphaned-entry risk exists: nothing in
+ * this codebase ever calls this function a second time for the same
+ * (company, item) while the first opening entry is still active - the
+ * duplicate-check above throws before a second journal could ever be
+ * posted.
  */
-export async function postOpeningStockTx(input: OpeningStockInput): Promise<StockTransaction> {
+export async function postOpeningStockTx(input: OpeningStockInput): Promise<PostOpeningStockResult> {
   if (input.qty <= 0) {
     throw new InventoryError("Opening stock quantity must be greater than zero");
   }
@@ -614,10 +654,28 @@ export async function postOpeningStockTx(input: OpeningStockInput): Promise<Stoc
       notes: input.notes,
       createdBy: input.createdBy,
     });
+
+    let journal: Journal | null = null;
+    if (input.unitCost !== undefined && input.unitCost !== null && input.unitCost > 0) {
+      const amount = round2(input.qty * input.unitCost);
+      if (amount > 0) {
+        journal = await postOpeningStockJournalTx(conn, {
+          companyId: input.companyId,
+          stockTxnId: txn.id,
+          txnDate: input.txnDate,
+          amount,
+          createdBy: input.createdBy,
+        });
+      }
+    }
+
     await conn.commit();
-    return txn;
+    return { stockTxn: txn, journal };
   } catch (err) {
     await conn.rollback();
+    if (err instanceof AccountingError) {
+      throw new InventoryError(`Opening stock could not be recorded: ${err.message}`);
+    }
     throw err;
   } finally {
     conn.release();
@@ -635,14 +693,42 @@ export interface AdjustmentInput {
   confirmNegativeStock?: boolean;
 }
 
+export interface PostAdjustmentResult {
+  stockTxn: StockTransaction;
+  /** The Dr/Cr Inventory journal (Phase 12G), or null when the resolved
+   * cost fell back to 0 (no cost basis existed for this item at all) -
+   * mirrors postSaleCogsJournalTx's own "skip the zero bucket" rule. */
+  journal: Journal | null;
+  /** True when unitCost had no real cost basis to resolve from and fell
+   * back to 0 (see resolveSaleCost) - surfaced explicitly, never silent,
+   * same contract as StockPostResult.costFallbacks elsewhere in this file. */
+  costFallback: boolean;
+}
+
 /**
  * Posts a manual stock adjustment (stocktake correction, damage, loss,
  * found stock, ...). An adjustment_out is subject to the exact same
  * negative-stock soft-block/confirm policy as a Tax Invoice's sale_issue -
  * there is nothing special about a sale that makes negative stock riskier
  * than a manual reduction; both get the same protection.
+ *
+ * Phase 12G: values the adjustment at the CURRENT weighted-average cost -
+ * resolved via resolveSaleCost (the exact same function sale_issue already
+ * uses; no second costing algorithm), evaluated before this row exists so
+ * it reflects the balance as it stood immediately prior, same timing rule
+ * as postDocumentStockMovementTx's own 'out' branch. Both adjustment_in and
+ * adjustment_out get a cost this way - an 'in' priced at today's average
+ * doesn't skew that average (old total value + qty*oldAvg, divided by old
+ * qty + qty, is still oldAvg), and an 'out' priced this way is exactly
+ * what a sale would use for the same quantity right now. When there is no
+ * cost basis at all, resolveSaleCost's own 0-with-isFallback contract
+ * applies unchanged - the row still records unit_cost = 0 (a real,
+ * recorded value, never left unset) and no journal is posted at all
+ * (skip-the-zero-bucket, matching postSaleCogsJournalTx). Journal posts
+ * Dr Inventory (1140) / Cr Other Expenses (5900) for an increase, or the
+ * reverse for a decrease - see postStockAdjustmentJournalTx.
  */
-export async function postAdjustmentTx(input: AdjustmentInput): Promise<StockTransaction> {
+export async function postAdjustmentTx(input: AdjustmentInput): Promise<PostAdjustmentResult> {
   if (input.qty <= 0) {
     throw new InventoryError("Adjustment quantity must be greater than zero");
   }
@@ -668,21 +754,113 @@ export async function postAdjustmentTx(input: AdjustmentInput): Promise<StockTra
       }
     }
 
+    const resolved = await resolveSaleCost(conn, input.companyId, input.itemId);
+
     const txn = await postStockTransactionTx(conn, {
       companyId: input.companyId,
       itemId: input.itemId,
       txnDate: input.txnDate,
       txnType: input.txnType,
       qty: input.qty,
+      unitCost: resolved.unitCost,
       sourceType: "adjustment",
       sourceId: null,
       notes: input.notes,
       createdBy: input.createdBy,
     });
+
+    let journal: Journal | null = null;
+    if (!resolved.isFallback) {
+      const amount = round2(input.qty * resolved.unitCost);
+      if (amount > 0) {
+        journal = await postStockAdjustmentJournalTx(conn, {
+          companyId: input.companyId,
+          stockTxnId: txn.id,
+          txnDate: input.txnDate,
+          txnType: input.txnType,
+          amount,
+          createdBy: input.createdBy,
+        });
+      }
+    }
+
     await conn.commit();
-    return txn;
+    return { stockTxn: txn, journal, costFallback: resolved.isFallback };
   } catch (err) {
     await conn.rollback();
+    if (err instanceof AccountingError) {
+      throw new InventoryError(`Stock adjustment could not be recorded: ${err.message}`);
+    }
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+export interface ReverseAdjustmentResult {
+  stockTxn: StockTransaction;
+  /** The reversal journal, or null when the original adjustment never
+   * posted one (a zero-cost-fallback adjustment - nothing to reverse on
+   * the accounting side, only on the stock side). */
+  journal: Journal | null;
+}
+
+/**
+ * Reverses one active manual stock adjustment by its own stock_transactions
+ * id - addressed directly, unlike reverseStockForSourceTx (which reverses
+ * every active row for a source_type/source_id pair; adjustments have no
+ * natural "parent document" id to group by, so this targets exactly one
+ * row instead). Reuses reverseOneStockTransactionTx unchanged - the
+ * reversal automatically carries over the EXACT SAME unit_cost as the
+ * original (Phase 12C's own established guarantee), dated CURDATE() (the
+ * same reversal-date convention as everywhere else, untouched). The
+ * accompanying journal (if the original adjustment posted one - see
+ * postAdjustmentTx's own "skip the zero bucket" rule) is reversed too, via
+ * the existing getJournalBySource/reverseJournalTx primitives, keyed off
+ * source_type "stock_adjustment" + this same stock_transactions id - no
+ * new journal is posted, only a reversal, matching the "cancel, don't
+ * repost" semantics every other reversal in this codebase already follows.
+ * Company-scoped by construction (the row lookup below is filtered by
+ * company_id, so a request for another company's transaction id is
+ * rejected as not-found, never silently reversing the wrong company's
+ * stock).
+ */
+export async function reverseAdjustmentTx(
+  companyId: number,
+  stockTxnId: number,
+  userId: number | null
+): Promise<ReverseAdjustmentResult> {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query<any[]>(
+      "SELECT * FROM stock_transactions WHERE id = ? AND company_id = ? FOR UPDATE",
+      [stockTxnId, companyId]
+    );
+    const txn = rows[0] as StockTransaction | undefined;
+    if (!txn) throw new InventoryError("Stock adjustment not found");
+    if (txn.txn_type !== "adjustment_in" && txn.txn_type !== "adjustment_out") {
+      throw new InventoryError("Only stock adjustments can be reversed through this endpoint");
+    }
+    if (txn.status !== "posted") {
+      throw new InventoryError("This adjustment has already been reversed");
+    }
+
+    const reversedStockTxn = await reverseOneStockTransactionTx(conn, txn, userId);
+
+    let reversalJournal: Journal | null = null;
+    const priorJournal = await getJournalBySource("stock_adjustment", stockTxnId);
+    if (priorJournal) {
+      reversalJournal = await reverseJournalTx(conn, priorJournal.id, userId);
+    }
+
+    await conn.commit();
+    return { stockTxn: reversedStockTxn, journal: reversalJournal };
+  } catch (err) {
+    await conn.rollback();
+    if (err instanceof AccountingError) {
+      throw new InventoryError(`Stock adjustment reversal failed: ${err.message}`);
+    }
     throw err;
   } finally {
     conn.release();

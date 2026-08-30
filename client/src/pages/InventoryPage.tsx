@@ -485,15 +485,21 @@ export function OpeningStockPage() {
     if (!companyId) return;
     setSaving(true);
     try {
-      await api.post("/inventory/opening-stock", {
-        company_id: companyId,
-        item_id: values.item_id,
-        txn_date: values.txn_date.format("YYYY-MM-DD"),
-        qty: values.qty,
-        unit_cost: values.unit_cost ?? null,
-        notes: values.notes || null,
-      });
-      message.success("Opening stock recorded");
+      const res = await api.post<{ transaction: StockTransaction; journal: { id: number; status: string } | null }>(
+        "/inventory/opening-stock",
+        {
+          company_id: companyId,
+          item_id: values.item_id,
+          txn_date: values.txn_date.format("YYYY-MM-DD"),
+          qty: values.qty,
+          unit_cost: values.unit_cost ?? null,
+          notes: values.notes || null,
+        }
+      );
+      // Phase 12G: a cost-less opening entry posts no journal at all (never
+      // fabricated) - the success message says so explicitly rather than
+      // implying every opening entry always hits the ledger.
+      message.success(res.journal ? `Opening stock recorded (journal #${res.journal.id} posted)` : "Opening stock recorded (no cost given - quantity only, no journal posted)");
       form.resetFields(["item_id", "qty", "unit_cost", "notes"]);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "Failed to record opening stock");
@@ -590,9 +596,18 @@ export function StockAdjustmentsPage() {
       qty: values.qty,
       notes: values.notes,
     };
+    type AdjustmentResponse = { transaction: StockTransaction; journal: { id: number; status: string } | null; costFallback: boolean };
+    // Phase 12G: costFallback true means this item had no cost basis at
+    // all - unit_cost fell back to 0 and no journal was posted (never
+    // fabricated) - surfaced explicitly rather than implying every
+    // adjustment always hits the ledger.
+    function describeResult(res: AdjustmentResponse): string {
+      if (res.costFallback) return "Adjustment recorded (no cost basis for this item - quantity only, no journal posted)";
+      return res.journal ? `Adjustment recorded (journal #${res.journal.id} posted)` : "Adjustment recorded";
+    }
     try {
-      const res = await api.post<{ transaction: StockTransaction }>("/inventory/adjustments", body);
-      message.success("Adjustment recorded");
+      const res = await api.post<AdjustmentResponse>("/inventory/adjustments", body);
+      message.success(describeResult(res));
       setLastPosted((prev) => [res.transaction, ...prev].slice(0, 10));
       form.resetFields(["item_id", "qty", "notes"]);
     } catch (err) {
@@ -601,8 +616,8 @@ export function StockAdjustmentsPage() {
         if (proceed) {
           body.confirm_negative_stock = true;
           try {
-            const res = await api.post<{ transaction: StockTransaction }>("/inventory/adjustments", body);
-            message.success("Adjustment recorded");
+            const res = await api.post<AdjustmentResponse>("/inventory/adjustments", body);
+            message.success(describeResult(res));
             setLastPosted((prev) => [res.transaction, ...prev].slice(0, 10));
             form.resetFields(["item_id", "qty", "notes"]);
           } catch (err2) {
