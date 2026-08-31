@@ -654,38 +654,49 @@ export interface PostStockAdjustmentJournalInput {
 }
 
 /**
- * Phase 12G: values a manual stock adjustment at the current weighted-
- * average cost and posts it to the ledger - adjustment_in (found stock,
- * stocktake increase) is Dr Inventory / Cr Other Expenses (5900) - a
- * gain, reducing that period's expense; adjustment_out (loss, damage,
- * shrinkage) is the reverse, Dr Other Expenses / Cr Inventory. Other
- * Expenses (5900) is the same "safe universal fallback" bucket
- * resolveExpenseAccountId already uses elsewhere in this file - not a
- * new account, and not a dedicated "Inventory Shrinkage" category (none
- * is seeded, and adding one is a schema change this phase does not need).
- * Must run on a `conn` already inside the caller's transaction.
+ * Phase 12G (corrected): values a manual stock adjustment at the current
+ * weighted-average cost and posts it to the ledger - adjustment_in (found
+ * stock, stocktake increase) is Dr Inventory / Cr Other Income (4300), a
+ * genuine gain; adjustment_out (loss, damage, shrinkage) is Dr Other
+ * Expenses (5900) / Cr Inventory, a genuine expense. Two different
+ * existing accounts on purpose - a gain has no business sitting on an
+ * expense account just because both happen to be "the adjustment
+ * account". Both are pre-seeded system accounts (chart_of_accounts
+ * category 'Other Income' / 'Other Expenses' respectively), resolved via
+ * getSystemAccountByCategory like every other account in this file -
+ * never hardcoded, and no new account or migration needed since neither a
+ * dedicated "Inventory Adjustment" gain/loss pair nor a plain
+ * "Inventory Shrinkage" category is seeded, but both Other Income and
+ * Other Expenses already are. Must run on a `conn` already inside the
+ * caller's transaction.
  */
 export async function postStockAdjustmentJournalTx(conn: PoolConnection, input: PostStockAdjustmentJournalInput): Promise<Journal> {
   const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
   if (!inventoryAccountId) {
     throw new AccountingError("Inventory system account not found for this company");
   }
-  const otherExpensesAccountId = await getSystemAccountByCategory(input.companyId, "Other Expenses");
-  if (!otherExpensesAccountId) {
-    throw new AccountingError("Other Expenses system account not found for this company");
-  }
 
   const description = `Stock adjustment (${input.txnType === "adjustment_in" ? "increase" : "decrease"}) - stock txn #${input.stockTxnId}`;
-  const lines: JournalLineInput[] =
-    input.txnType === "adjustment_in"
-      ? [
-          { account_id: inventoryAccountId, debit: input.amount, credit: 0, description },
-          { account_id: otherExpensesAccountId, debit: 0, credit: input.amount, description },
-        ]
-      : [
-          { account_id: otherExpensesAccountId, debit: input.amount, credit: 0, description },
-          { account_id: inventoryAccountId, debit: 0, credit: input.amount, description },
-        ];
+  let lines: JournalLineInput[];
+  if (input.txnType === "adjustment_in") {
+    const otherIncomeAccountId = await getSystemAccountByCategory(input.companyId, "Other Income");
+    if (!otherIncomeAccountId) {
+      throw new AccountingError("Other Income system account not found for this company");
+    }
+    lines = [
+      { account_id: inventoryAccountId, debit: input.amount, credit: 0, description },
+      { account_id: otherIncomeAccountId, debit: 0, credit: input.amount, description },
+    ];
+  } else {
+    const otherExpensesAccountId = await getSystemAccountByCategory(input.companyId, "Other Expenses");
+    if (!otherExpensesAccountId) {
+      throw new AccountingError("Other Expenses system account not found for this company");
+    }
+    lines = [
+      { account_id: otherExpensesAccountId, debit: input.amount, credit: 0, description },
+      { account_id: inventoryAccountId, debit: 0, credit: input.amount, description },
+    ];
+  }
 
   return createJournalTx(conn, {
     company_id: input.companyId,
