@@ -128,6 +128,7 @@ export function SalesDocumentPage({
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState<number | undefined>();
   const [loading, setLoading] = useState(false);
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -157,8 +158,9 @@ export function SalesDocumentPage({
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      const companyParam = companyFilter ? `&company_id=${companyFilter}` : "";
       const res = await api.get<{ data: SalesDocument[]; meta: { total: number } }>(
-        `${apiPath}?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}`
+        `${apiPath}?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}${companyParam}`
       );
       setRows(res.data);
       setTotal(res.meta.total);
@@ -167,7 +169,7 @@ export function SalesDocumentPage({
     } finally {
       setLoading(false);
     }
-  }, [apiPath, page, search, pluralTitle]);
+  }, [apiPath, page, search, companyFilter, pluralTitle]);
 
   useEffect(() => {
     load();
@@ -537,7 +539,18 @@ export function SalesDocumentPage({
         <Typography.Title level={4} style={{ margin: 0 }}>
           {pluralTitle}
         </Typography.Title>
-        <Space>
+        <Space wrap>
+          <Select
+            placeholder="All Companies"
+            allowClear
+            value={companyFilter}
+            options={companies.map((c) => ({ value: c.id, label: c.name }))}
+            onChange={(value) => {
+              setPage(1);
+              setCompanyFilter(value);
+            }}
+            style={{ width: 180 }}
+          />
           <Input.Search
             placeholder="Search number or customer"
             allowClear

@@ -26,10 +26,13 @@ receiptsRouter.get(
     const page = Math.max(Number(req.query.page) || 1, 1);
     const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const companyId = req.query.company_id ? Number(req.query.company_id) : null;
     const offset = (page - 1) * perPage;
 
     const searchClause = search ? "AND (r.receipt_no LIKE ? OR c.name LIKE ?)" : "";
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
+    const companyClause = companyId ? "AND r.company_id = ?" : "";
+    const companyParams = companyId ? [companyId] : [];
 
     const [rows] = await pool.query<any[]>(
       `SELECT r.*, c.name as customer_name, co.name as company_name, co.code as company_code,
@@ -38,14 +41,14 @@ receiptsRouter.get(
        JOIN customers c ON c.id = r.customer_id
        JOIN companies co ON co.id = r.company_id
        LEFT JOIN documents inv ON inv.id = r.tax_invoice_id
-       WHERE 1=1 ${searchClause}
+       WHERE 1=1 ${searchClause} ${companyClause}
        ORDER BY r.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...searchParams, perPage, offset]
+      [...searchParams, ...companyParams, perPage, offset]
     );
     const [countRows] = await pool.query<any[]>(
-      `SELECT COUNT(*) as total FROM receipts r JOIN customers c ON c.id = r.customer_id WHERE 1=1 ${searchClause}`,
-      searchParams
+      `SELECT COUNT(*) as total FROM receipts r JOIN customers c ON c.id = r.customer_id WHERE 1=1 ${searchClause} ${companyClause}`,
+      [...searchParams, ...companyParams]
     );
 
     res.json({ data: rows, meta: { page, perPage, total: countRows[0].total as number } });

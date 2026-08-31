@@ -38,6 +38,7 @@ export function ReceiptsPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [listCompanyFilter, setListCompanyFilter] = useState<number | undefined>();
   const [loading, setLoading] = useState(false);
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -61,8 +62,9 @@ export function ReceiptsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      const companyParam = listCompanyFilter ? `&company_id=${listCompanyFilter}` : "";
       const res = await api.get<{ data: Receipt[]; meta: { total: number } }>(
-        `/receipts?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}`
+        `/receipts?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}${companyParam}`
       );
       setReceipts(res.data);
       setTotal(res.meta.total);
@@ -71,7 +73,7 @@ export function ReceiptsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search]);
+  }, [page, search, listCompanyFilter]);
 
   useEffect(() => {
     load();
@@ -211,7 +213,18 @@ export function ReceiptsPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           Receipts
         </Typography.Title>
-        <Space>
+        <Space wrap>
+          <Select
+            placeholder="All Companies"
+            allowClear
+            value={listCompanyFilter}
+            options={companies.map((c) => ({ value: c.id, label: c.name }))}
+            onChange={(value) => {
+              setPage(1);
+              setListCompanyFilter(value);
+            }}
+            style={{ width: 180 }}
+          />
           <Input.Search
             placeholder="Search number or customer"
             allowClear

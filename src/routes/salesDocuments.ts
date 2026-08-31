@@ -177,27 +177,30 @@ export function createSalesDocumentRouter(
       const page = Math.max(Number(req.query.page) || 1, 1);
       const perPage = Math.min(Math.max(Number(req.query.perPage) || 10, 1), 100);
       const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+      const companyId = req.query.company_id ? Number(req.query.company_id) : null;
       const offset = (page - 1) * perPage;
 
       const searchClause = search ? "AND (d.doc_number LIKE ? OR c.name LIKE ?)" : "";
       const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
+      const companyClause = companyId ? "AND d.company_id = ?" : "";
+      const companyParams = companyId ? [companyId] : [];
 
       const [rows] = await pool.query<any[]>(
         `SELECT d.*, c.name as customer_name, co.name as company_name, co.code as company_code${paymentSelect}
          FROM documents d
          JOIN customers c ON c.id = d.customer_id
          JOIN companies co ON co.id = d.company_id
-         WHERE d.doc_type = ? ${searchClause}
+         WHERE d.doc_type = ? ${searchClause} ${companyClause}
          ORDER BY d.created_at DESC
          LIMIT ? OFFSET ?`,
-        [docType, ...searchParams, perPage, offset]
+        [docType, ...searchParams, ...companyParams, perPage, offset]
       );
       const [countRows] = await pool.query<any[]>(
         `SELECT COUNT(*) as total
          FROM documents d
          JOIN customers c ON c.id = d.customer_id
-         WHERE d.doc_type = ? ${searchClause}`,
-        [docType, ...searchParams]
+         WHERE d.doc_type = ? ${searchClause} ${companyClause}`,
+        [docType, ...searchParams, ...companyParams]
       );
 
       res.json({ data: rows, meta: { page, perPage, total: countRows[0].total as number } });
