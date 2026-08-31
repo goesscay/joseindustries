@@ -54,17 +54,22 @@ export async function getNextDocNumber(docType: SeriesType, companyCode: string,
 }
 
 /**
- * Tax Invoice follows the company's own required numbering convention -
- * "{companyCode}-{seq}/{financialYear}" (e.g. "JI-001/26-27",
- * "JE-001/26-27"), 3-digit sequence, no doc-type prefix. Every other
- * series (quotation, proforma, delivery challan, receipt, expense,
- * vendor payment, purchase bill/order) keeps the original
- * "{PREFIX}/{companyCode}/{financialYear}/{seq}" shape, 4-digit sequence -
- * unchanged, since only the invoice format was specified as wrong.
+ * Tax Invoice and Quotation each follow the company's own required
+ * numbering convention instead of the generic
+ * "{PREFIX}/{companyCode}/{financialYear}/{seq}" shape every other series
+ * (proforma, delivery challan, receipt, expense, vendor payment, purchase
+ * bill/order) still uses:
+ *   - tax_invoice: "{companyCode}-{seq}/{financialYear}", 3-digit seq
+ *     (e.g. "JI-001/26-27", "JE-001/26-27")
+ *   - quotation:   "{companyCode}-QT-{seq}/{financialYear}", 2-digit seq
+ *     (e.g. "JI-QT-01/26-27", "JE-QT-01/26-27")
  */
 function formatDocNumber(docType: SeriesType, companyCode: string, financialYear: string, seq: number): string {
   if (docType === "tax_invoice") {
     return `${companyCode}-${String(seq).padStart(3, "0")}/${financialYear}`;
+  }
+  if (docType === "quotation") {
+    return `${companyCode}-QT-${String(seq).padStart(2, "0")}/${financialYear}`;
   }
   return `${PREFIXES[docType]}/${companyCode}/${financialYear}/${String(seq).padStart(4, "0")}`;
 }
