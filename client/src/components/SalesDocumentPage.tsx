@@ -288,9 +288,31 @@ export function SalesDocumentPage({
     form.setFieldsValue(values);
   }
 
+  // The customer dropdown is only ever populated from the first page of
+  // /customers (capped server-side at 100 rows) - a customer sitting
+  // outside that page (alphabetically past the cap, or simply added after
+  // this page loaded) has no matching option, so the Select falls back to
+  // showing the raw numeric customer_id instead of a name. Editing a
+  // document whose customer isn't in the loaded list hits exactly that gap
+  // - fetch that one customer directly and merge it in so the field always
+  // resolves to a real name, regardless of how many customers exist or
+  // where this one sorts among them.
+  async function ensureCustomerLoaded(customerId: number) {
+    if (customers.some((c) => c.id === customerId)) return;
+    try {
+      const res = await api.get<{ customer: Customer }>(`/customers/${customerId}`);
+      setCustomers((prev) => (prev.some((c) => c.id === customerId) ? prev : [...prev, res.customer]));
+    } catch {
+      // Customer genuinely gone (shouldn't happen - customers with
+      // existing documents can't be deleted) - leave the id showing rather
+      // than fail the whole edit.
+    }
+  }
+
   async function openEdit(record: SalesDocument) {
     try {
       const res = await api.get<{ document: SalesDocument; items: DocumentLineItem[] }>(`${apiPath}/${record.id}`);
+      await ensureCustomerLoaded(res.document.customer_id);
       setEditingDoc(res.document);
       setConvertTarget(null);
       setConvertSourceId(null);
@@ -304,6 +326,7 @@ export function SalesDocumentPage({
   async function openConvert(record: SalesDocument, target: ConvertTarget) {
     try {
       const res = await api.get<{ document: SalesDocument; items: DocumentLineItem[] }>(`${apiPath}/${record.id}`);
+      await ensureCustomerLoaded(res.document.customer_id);
       setEditingDoc(null);
       setConvertTarget(target);
       setConvertSourceId(record.id);

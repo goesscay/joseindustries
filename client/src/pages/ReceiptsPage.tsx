@@ -111,7 +111,26 @@ export function ReceiptsPage() {
     setModalOpen(true);
   }
 
-  function openEdit(record: Receipt) {
+  // The customer dropdown is only ever populated from the first page of
+  // /customers (capped server-side at 100 rows) - a customer sitting
+  // outside that page has no matching option, so the Select falls back to
+  // showing the raw numeric customer_id instead of a name. Fetch that one
+  // customer directly and merge it in so editing a receipt always resolves
+  // to a real name, regardless of how many customers exist.
+  async function ensureCustomerLoaded(customerId: number) {
+    if (customers.some((c) => c.id === customerId)) return;
+    try {
+      const res = await api.get<{ customer: Customer }>(`/customers/${customerId}`);
+      setCustomers((prev) => (prev.some((c) => c.id === customerId) ? prev : [...prev, res.customer]));
+    } catch {
+      // Customer genuinely gone (shouldn't happen - customers with
+      // existing documents can't be deleted) - leave the id showing rather
+      // than fail the whole edit.
+    }
+  }
+
+  async function openEdit(record: Receipt) {
+    await ensureCustomerLoaded(record.customer_id);
     setEditing(record);
     form.setFieldsValue({
       company_id: record.company_id,
