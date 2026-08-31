@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Layout, Menu, Drawer, Grid, Dropdown, Avatar, Space, Typography } from "antd";
+import { Layout, Menu, Drawer, Grid, Dropdown, Avatar, Space, Typography, Button } from "antd";
 import type { MenuProps } from "antd";
 import {
   HomeOutlined,
   TeamOutlined,
   MenuOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   UserOutlined,
   LogoutOutlined,
   ContactsOutlined,
@@ -86,6 +88,7 @@ export function AppLayout() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   const rawNavItems: NavItem[] = useMemo(
     () =>
@@ -263,32 +266,60 @@ export function AppLayout() {
   const selectedKey = allLeafKeys.find((key) => (key === "/" ? location.pathname === "/" : location.pathname.startsWith(key))) ?? "/";
   const activeGroupKey = leafToGroup.get(selectedKey);
 
+  // Every top-level group key ("group-sales", "group-purchases", ...) -
+  // used by handleOpenChange below to tell "just opened a whole new
+  // section" apart from "opened/closed a nested submenu inside the one
+  // that's already open" (there aren't any nested submenus today, but this
+  // stays correct if one is ever added).
+  const rootSubmenuKeys = useMemo(
+    () => navItems.filter((item) => item && "children" in item && item.children).map((item) => String(item!.key)),
+    [navItems]
+  );
+
   const [openKeys, setOpenKeys] = useState<string[]>(activeGroupKey ? [activeGroupKey] : []);
 
   // Re-derive on route change so navigating (e.g. via a dashboard shortcut)
-  // opens the right group even if the user never clicked the menu itself.
+  // opens the right group even if the user never clicked the menu itself -
+  // replacing openKeys outright (not appending) so this also enforces the
+  // "only one section open at a time" rule for non-click navigation.
   const [lastPath, setLastPath] = useState(location.pathname);
   if (location.pathname !== lastPath) {
     setLastPath(location.pathname);
-    if (activeGroupKey && !openKeys.includes(activeGroupKey)) {
-      setOpenKeys((prev) => [...prev, activeGroupKey]);
+    setOpenKeys(activeGroupKey ? [activeGroupKey] : []);
+  }
+
+  // Accordion behaviour: opening a new top-level section closes whichever
+  // one was open before, instead of both staying expanded at once. The
+  // "just opened a group" case is detected as the one key present in the
+  // new `keys` that wasn't in the previous `openKeys`; collapsing the
+  // currently-open group (clicking it again) falls through unchanged since
+  // no such new key exists.
+  function handleOpenChange(keys: string[]) {
+    const latestOpenKey = keys.find((key) => !openKeys.includes(key));
+    if (latestOpenKey && rootSubmenuKeys.includes(latestOpenKey)) {
+      setOpenKeys([latestOpenKey]);
+    } else {
+      setOpenKeys(keys);
     }
   }
 
-  const menu = (
-    <Menu
-      mode="inline"
-      selectedKeys={[selectedKey]}
-      openKeys={openKeys}
-      onOpenChange={(keys) => setOpenKeys(keys)}
-      items={navItems}
-      onClick={({ key }) => {
-        navigate(KEY_ALIASES[key] ?? key);
-        setDrawerOpen(false);
-      }}
-      style={{ borderInlineEnd: "none" }}
-    />
-  );
+  function renderMenu(inlineCollapsed: boolean) {
+    return (
+      <Menu
+        mode="inline"
+        inlineCollapsed={inlineCollapsed}
+        selectedKeys={[selectedKey]}
+        openKeys={inlineCollapsed ? [] : openKeys}
+        onOpenChange={handleOpenChange}
+        items={navItems}
+        onClick={({ key }) => {
+          navigate(KEY_ALIASES[key] ?? key);
+          setDrawerOpen(false);
+        }}
+        style={{ borderInlineEnd: "none" }}
+      />
+    );
+  }
 
   const userMenuItems = [
     {
@@ -302,11 +333,18 @@ export function AppLayout() {
   return (
     <Layout style={{ minHeight: "100vh" }}>
       {!isMobile && (
-        <Sider breakpoint="md" width={220} style={{ borderInlineEnd: "1px solid #f0f0f0", overflow: "auto" }}>
+        <Sider
+          width={220}
+          collapsible
+          collapsed={collapsed}
+          onCollapse={setCollapsed}
+          trigger={null}
+          style={{ borderInlineEnd: "1px solid #f0f0f0", overflow: "auto" }}
+        >
           <div style={{ height: 56, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <img src={logo} alt="Jose Industries" style={{ height: 28 }} />
+            {!collapsed && <img src={logo} alt="Jose Industries" style={{ height: 28 }} />}
           </div>
-          {menu}
+          {renderMenu(collapsed)}
         </Sider>
       )}
 
@@ -319,7 +357,7 @@ export function AppLayout() {
           styles={{ body: { padding: 0 } }}
           closable={false}
         >
-          {menu}
+          {renderMenu(false)}
         </Drawer>
       )}
 
@@ -339,6 +377,14 @@ export function AppLayout() {
               <MenuOutlined onClick={() => setDrawerOpen(true)} style={{ fontSize: 18 }} />
             )}
             {isMobile && <img src={logo} alt="Jose Industries" style={{ height: 22 }} />}
+            {!isMobile && (
+              <Button
+                type="text"
+                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={() => setCollapsed((prev) => !prev)}
+                title={collapsed ? "Expand menu" : "Collapse menu"}
+              />
+            )}
           </Space>
           <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
             <Space style={{ cursor: "pointer" }}>
