@@ -3,6 +3,8 @@ import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
+import { getPartyLedgerReport, PartyLedgerError } from "../services/partyLedger";
+import { streamPartyLedgerPdf } from "../services/pdf/partyLedgerPdf";
 
 export const reportsRouter = Router();
 // Every route here is a read - one router-level gate covers all of them.
@@ -100,7 +102,9 @@ reportsRouter.get(
 
 // ---- Party Ledger: statement for one customer (Tax Invoices raise what
 // they owe us, Receipts reduce it) or one vendor (Expenses raise what we
-// owe them, Vendor Payments reduce it). ----
+// owe them, Vendor Payments reduce it). Both this JSON route and the /pdf
+// route below share the exact same computation via getPartyLedgerReport -
+// never two copies of this logic. ----
 reportsRouter.get(
   "/party-ledger",
   asyncHandler(async (req, res) => {
@@ -112,121 +116,43 @@ reportsRouter.get(
     }
     if (!partyId) return res.status(400).json({ message: "id is required" });
 
-    if (partyType === "customer") {
-      const [partyRows] = await pool.query<any[]>("SELECT * FROM customers WHERE id = ?", [partyId]);
-      if (!partyRows[0]) return res.status(404).json({ message: "Customer not found" });
-
-      const [openingDebit] = await pool.query<any[]>(
-        `SELECT COALESCE(SUM(grand_total), 0) as total FROM documents
-         WHERE doc_type = 'tax_invoice' AND customer_id = ? AND status != 'cancelled' AND issue_date < ?`,
-        [partyId, from]
-      );
-      const [openingCredit] = await pool.query<any[]>(
-        `SELECT COALESCE(SUM(amount), 0) as total FROM receipts WHERE customer_id = ? AND received_date < ?`,
-        [partyId, from]
-      );
-      const openingBalance = Number(openingDebit[0].total) - Number(openingCredit[0].total);
-
-      const [invoices] = await pool.query<any[]>(
-        `SELECT id, doc_number, issue_date as entry_date, grand_total as amount, created_at
-         FROM documents
-         WHERE doc_type = 'tax_invoice' AND customer_id = ? AND status != 'cancelled' AND issue_date BETWEEN ? AND ?`,
-        [partyId, from, to]
-      );
-      const [receipts] = await pool.query<any[]>(
-        `SELECT id, receipt_no as doc_number, received_date as entry_date, amount, created_at
-         FROM receipts WHERE customer_id = ? AND received_date BETWEEN ? AND ?`,
-        [partyId, from, to]
-      );
-
-      const combined = [
-        ...invoices.map((i) => ({
-          entry_date: i.entry_date,
-          created_at: i.created_at,
-          doc_number: i.doc_number,
-          description: "Tax Invoice",
-          debit: Number(i.amount),
-          credit: 0,
-        })),
-        ...receipts.map((r) => ({
-          entry_date: r.entry_date,
-          created_at: r.created_at,
-          doc_number: r.doc_number,
-          description: "Receipt",
-          debit: 0,
-          credit: Number(r.amount),
-        })),
-      ];
-      combined.sort((a, b) => {
-        const d = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
-        if (d !== 0) return d;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
-
-      let running = openingBalance;
-      const entries = combined.map((e) => {
-        running += e.debit - e.credit;
-        return { ...e, created_at: undefined, balance: running };
-      });
-
-      return res.json({ party: partyRows[0], openingBalance, entries, closingBalance: running });
+    try {
+      const { party, openingBalance, entries, closingBalance } = await getPartyLedgerReport(partyType, partyId, from, to);
+      res.json({ party, openingBalance, entries, closingBalance });
+    } catch (err) {
+      if (err instanceof PartyLedgerError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      throw err;
     }
+  })
+);
 
-    const [partyRows] = await pool.query<any[]>("SELECT * FROM vendors WHERE id = ?", [partyId]);
-    if (!partyRows[0]) return res.status(404).json({ message: "Vendor not found" });
+// ---- Party Ledger PDF: same figures as the JSON route above, streamed as
+// a downloadable/printable statement instead - mirrors the existing
+// "open the PDF in a new tab" convention used for Tax Invoices/Quotations/
+// Receipts elsewhere in this app (the browser's own PDF viewer covers both
+// "Print" and "Save as PDF" from there). ----
+reportsRouter.get(
+  "/party-ledger/pdf",
+  asyncHandler(async (req, res) => {
+    const partyType = req.query.type;
+    const partyId = Number(req.query.id);
+    const { from, to } = dateRange(req.query);
+    if (partyType !== "customer" && partyType !== "vendor") {
+      return res.status(400).json({ message: "type must be 'customer' or 'vendor'" });
+    }
+    if (!partyId) return res.status(400).json({ message: "id is required" });
 
-    const [openingDebit] = await pool.query<any[]>(
-      `SELECT COALESCE(SUM(total_amount), 0) as total FROM expenses WHERE vendor_id = ? AND expense_date < ?`,
-      [partyId, from]
-    );
-    const [openingCredit] = await pool.query<any[]>(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM vendor_payments WHERE vendor_id = ? AND paid_date < ?`,
-      [partyId, from]
-    );
-    const openingBalance = Number(openingDebit[0].total) - Number(openingCredit[0].total);
-
-    const [expenses] = await pool.query<any[]>(
-      `SELECT id, expense_no as doc_number, expense_date as entry_date, total_amount as amount, created_at
-       FROM expenses WHERE vendor_id = ? AND expense_date BETWEEN ? AND ?`,
-      [partyId, from, to]
-    );
-    const [payments] = await pool.query<any[]>(
-      `SELECT id, payment_no as doc_number, paid_date as entry_date, amount, created_at
-       FROM vendor_payments WHERE vendor_id = ? AND paid_date BETWEEN ? AND ?`,
-      [partyId, from, to]
-    );
-
-    const combined = [
-      ...expenses.map((e) => ({
-        entry_date: e.entry_date,
-        created_at: e.created_at,
-        doc_number: e.doc_number,
-        description: "Expense",
-        debit: Number(e.amount),
-        credit: 0,
-      })),
-      ...payments.map((p) => ({
-        entry_date: p.entry_date,
-        created_at: p.created_at,
-        doc_number: p.doc_number,
-        description: "Vendor Payment",
-        debit: 0,
-        credit: Number(p.amount),
-      })),
-    ];
-    combined.sort((a, b) => {
-      const d = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
-      if (d !== 0) return d;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-
-    let running = openingBalance;
-    const entries = combined.map((e) => {
-      running += e.debit - e.credit;
-      return { ...e, created_at: undefined, balance: running };
-    });
-
-    res.json({ party: partyRows[0], openingBalance, entries, closingBalance: running });
+    try {
+      const report = await getPartyLedgerReport(partyType, partyId, from, to);
+      streamPartyLedgerPdf(res, report, from, to);
+    } catch (err) {
+      if (err instanceof PartyLedgerError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      throw err;
+    }
   })
 );
 

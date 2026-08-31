@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Tabs, Select, DatePicker, Radio, Table, Typography, Space, Button, message, Statistic, Row, Col, Card, Tag } from "antd";
+import { FilePdfOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { Dayjs } from "dayjs";
 import { api } from "../api/client";
@@ -191,6 +192,20 @@ function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors
   const partyOptions =
     partyType === "customer" ? customers.map((c) => ({ value: c.id, label: c.name })) : vendors.map((v) => ({ value: v.id, label: v.name }));
 
+  // Opens the PDF in a new tab, exactly like every other document's
+  // "Download PDF" button in this app - the browser's own PDF viewer then
+  // covers both printing and saving from there.
+  function printOrDownloadPdf() {
+    if (!partyId) return;
+    const params = new URLSearchParams({
+      type: partyType,
+      id: String(partyId),
+      from: range[0].format("YYYY-MM-DD"),
+      to: range[1].format("YYYY-MM-DD"),
+    });
+    window.open(`/api/reports/party-ledger/pdf?${params.toString()}`, "_blank");
+  }
+
   const columns: ColumnsType<PartyLedgerEntry> = [
     { title: "Date", dataIndex: "entry_date", key: "entry_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
     { title: "No.", dataIndex: "doc_number", key: "doc_number" },
@@ -221,11 +236,18 @@ function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors
 
       {partyId && (
         <>
-          <Typography.Text>Opening Balance: Rs. {formatMoney(openingBalance)}</Typography.Text>
-          <br />
-          <Typography.Text strong>
-            Closing Balance: Rs. {formatMoney(closingBalance)} {closingBalance > 0.01 ? `(${partyType === "customer" ? "receivable" : "payable"})` : ""}
-          </Typography.Text>
+          <Space align="baseline" style={{ width: "100%", justifyContent: "space-between" }}>
+            <div>
+              <Typography.Text>Opening Balance: Rs. {formatMoney(openingBalance)}</Typography.Text>
+              <br />
+              <Typography.Text strong>
+                Closing Balance: Rs. {formatMoney(closingBalance)} {closingBalance > 0.01 ? `(${partyType === "customer" ? "receivable" : "payable"})` : ""}
+              </Typography.Text>
+            </div>
+            <Button icon={<FilePdfOutlined />} onClick={printOrDownloadPdf}>
+              Print / Download PDF
+            </Button>
+          </Space>
           <Table
             rowKey={(_, i) => String(i)}
             columns={columns}
