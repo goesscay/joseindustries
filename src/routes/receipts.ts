@@ -42,7 +42,7 @@ receiptsRouter.get(
        JOIN companies co ON co.id = r.company_id
        LEFT JOIN documents inv ON inv.id = r.tax_invoice_id
        WHERE 1=1 ${searchClause} ${companyClause}
-       ORDER BY r.created_at DESC
+       ORDER BY r.received_date DESC, r.id DESC
        LIMIT ? OFFSET ?`,
       [...searchParams, ...companyParams, perPage, offset]
     );

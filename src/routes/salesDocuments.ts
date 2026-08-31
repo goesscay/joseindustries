@@ -191,7 +191,7 @@ export function createSalesDocumentRouter(
          JOIN customers c ON c.id = d.customer_id
          JOIN companies co ON co.id = d.company_id
          WHERE d.doc_type = ? ${searchClause} ${companyClause}
-         ORDER BY d.created_at DESC
+         ORDER BY d.issue_date DESC, d.id DESC
          LIMIT ? OFFSET ?`,
         [docType, ...searchParams, ...companyParams, perPage, offset]
       );
