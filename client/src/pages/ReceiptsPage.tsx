@@ -19,6 +19,7 @@ import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "../components/QuickAddCustomerModal";
+import { RemoteSelect } from "../components/RemoteSelect";
 import { Account, Company, Customer, PaymentMode, Receipt, SalesDocument } from "../types";
 
 const PAGE_SIZE = 10;
@@ -81,7 +82,11 @@ export function ReceiptsPage() {
 
   useEffect(() => {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
-    api.get<{ data: Customer[] }>("/customers?perPage=200").then((res) => setCustomers(res.data)).catch(() => {});
+    // No bulk customer preload anymore - the Customer field's RemoteSelect
+    // below searches the server directly; `customers` here now only ever
+    // holds the specific records that must stay selectable regardless of
+    // search text - see ensureCustomerLoaded and the QuickAddCustomerModal
+    // callback further down.
     api
       .get<{ data: SalesDocument[] }>("/tax-invoices?perPage=200")
       .then((res) => setInvoices(res.data))
@@ -295,11 +300,11 @@ export function ReceiptsPage() {
                 rules={[{ required: true, message: "Customer is required" }]}
                 style={{ flex: 1, marginBottom: 0 }}
               >
-                <Select
-                  showSearch
+                <RemoteSelect<Customer>
+                  searchPath="/customers"
+                  mapOption={(c) => ({ value: c.id, label: c.name })}
+                  extraOptions={customers.map((c) => ({ value: c.id, label: c.name }))}
                   placeholder="Select customer"
-                  options={customers.map((c) => ({ value: c.id, label: c.name }))}
-                  filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
                   onChange={() => form.setFieldsValue({ tax_invoice_id: undefined })}
                 />
               </Form.Item>

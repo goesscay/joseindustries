@@ -5,6 +5,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { RemoteSelect } from "../components/RemoteSelect";
 import { Company, Expense, ExpenseCategory, Vendor } from "../types";
 
 const PAGE_SIZE = 10;
@@ -51,9 +52,27 @@ export function ExpensesPage() {
 
   useEffect(() => {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
-    api.get<{ data: Vendor[] }>("/vendors?perPage=200").then((res) => setVendors(res.data)).catch(() => {});
+    // No bulk vendor preload anymore - the Vendor field's RemoteSelect
+    // below searches the server directly; `vendors` here now only ever
+    // holds the specific record (the one being edited, if any) that must
+    // stay selectable regardless of search text - see ensureVendorLoaded.
     api.get<{ data: ExpenseCategory[] }>("/expense-categories").then((res) => setCategories(res.data)).catch(() => {});
   }, []);
+
+  // Same gap as the customer field elsewhere in this app: the Vendor
+  // dropdown is only ever populated from a live server search now, so
+  // resolving the *currently selected* vendor when opening the edit form
+  // needs its own direct fetch, merged in as an extra option.
+  async function ensureVendorLoaded(vendorId: number | null | undefined) {
+    if (!vendorId || vendors.some((v) => v.id === vendorId)) return;
+    try {
+      const res = await api.get<{ vendor: Vendor }>(`/vendors/${vendorId}`);
+      setVendors((prev) => (prev.some((v) => v.id === vendorId) ? prev : [...prev, res.vendor]));
+    } catch {
+      // Vendor genuinely gone - leave the id showing rather than fail the
+      // whole edit.
+    }
+  }
 
   function openCreate() {
     setEditing(null);
@@ -67,7 +86,8 @@ export function ExpensesPage() {
     setModalOpen(true);
   }
 
-  function openEdit(record: Expense) {
+  async function openEdit(record: Expense) {
+    await ensureVendorLoaded(record.vendor_id);
     setEditing(record);
     form.setFieldsValue({
       company_id: record.company_id,
@@ -213,12 +233,12 @@ export function ExpensesPage() {
             <Select placeholder="Select company" options={companies.map((c) => ({ value: c.id, label: c.name }))} />
           </Form.Item>
           <Form.Item name="vendor_id" label="Vendor (optional)">
-            <Select
+            <RemoteSelect<Vendor>
               allowClear
-              showSearch
+              searchPath="/vendors"
+              mapOption={(v) => ({ value: v.id, label: v.name })}
+              extraOptions={vendors.map((v) => ({ value: v.id, label: v.name }))}
               placeholder="Select vendor"
-              options={vendors.map((v) => ({ value: v.id, label: v.name }))}
-              filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
             />
           </Form.Item>
           <Form.Item name="category_id" label="Category">

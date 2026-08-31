@@ -20,6 +20,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, SwapOutlined } from "@ant-d
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { RemoteSelect } from "../components/RemoteSelect";
 import { Company, Item, PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus, Vendor } from "../types";
 
 const PAGE_SIZE = 10;
@@ -95,9 +96,26 @@ export function PurchaseOrdersPage() {
 
   useEffect(() => {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
-    api.get<{ data: Vendor[] }>("/vendors?perPage=200").then((res) => setVendors(res.data)).catch(() => {});
+    // No bulk vendor preload anymore - the Vendor field's RemoteSelect
+    // below searches the server directly; `vendors` here now only ever
+    // holds the specific record being edited, if any - see
+    // ensureVendorLoaded.
     api.get<{ data: Item[] }>("/items?perPage=200").then((res) => setItems(res.data)).catch(() => {});
   }, []);
+
+  // Same gap as the customer field elsewhere in this app: resolving the
+  // *currently selected* vendor when opening the edit form needs its own
+  // direct fetch, merged in as an extra option.
+  async function ensureVendorLoaded(vendorId: number | null | undefined) {
+    if (!vendorId || vendors.some((v) => v.id === vendorId)) return;
+    try {
+      const res = await api.get<{ vendor: Vendor }>(`/vendors/${vendorId}`);
+      setVendors((prev) => (prev.some((v) => v.id === vendorId) ? prev : [...prev, res.vendor]));
+    } catch {
+      // Vendor genuinely gone - leave the id showing rather than fail the
+      // whole edit.
+    }
+  }
 
   const totals = useMemo(() => {
     let subtotal = 0;
@@ -130,6 +148,7 @@ export function PurchaseOrdersPage() {
   async function openEdit(record: PurchaseOrder) {
     try {
       const res = await api.get<{ order: PurchaseOrder; items: PurchaseOrderItem[] }>(`/purchase-orders/${record.id}`);
+      await ensureVendorLoaded(res.order.vendor_id);
       setEditing(res.order);
       form.setFieldsValue({
         company_id: res.order.company_id,
@@ -338,12 +357,12 @@ export function PurchaseOrdersPage() {
               rules={[{ required: true, message: "Vendor is required" }]}
               style={{ width: "36%", marginBottom: 0 }}
             >
-              <Select
-                showSearch
+              <RemoteSelect<Vendor>
+                searchPath="/vendors"
+                mapOption={(v) => ({ value: v.id, label: v.name })}
+                extraOptions={vendors.map((v) => ({ value: v.id, label: v.name }))}
                 placeholder="Select vendor"
                 style={{ width: "100%" }}
-                options={vendors.map((v) => ({ value: v.id, label: v.name }))}
-                filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
               />
             </Form.Item>
             <Form.Item name="status" label="Status" style={{ width: "30%", marginBottom: 0 }}>

@@ -27,6 +27,7 @@ import dayjs from "dayjs";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "./QuickAddCustomerModal";
+import { RemoteSelect } from "./RemoteSelect";
 import {
   Company,
   Customer,
@@ -177,7 +178,12 @@ export function SalesDocumentPage({
 
   useEffect(() => {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
-    api.get<{ data: Customer[] }>("/customers?perPage=200").then((res) => setCustomers(res.data)).catch(() => {});
+    // No bulk customer preload anymore - the Customer field's RemoteSelect
+    // below searches the server directly; `customers` here now only ever
+    // holds the handful of specific records (the one being edited, one
+    // just quick-added) that must stay selectable regardless of search
+    // text - see ensureCustomerLoaded and the QuickAddCustomerModal
+    // callback further down.
     api.get<{ data: Item[] }>("/items?perPage=200").then((res) => setItems(res.data)).catch(() => {});
     api.get<{ data: PaymentTerm[] }>("/payment-terms").then((res) => setPaymentTerms(res.data)).catch(() => {});
     api
@@ -625,11 +631,11 @@ export function SalesDocumentPage({
                     rules={[{ required: true, message: "Customer is required" }]}
                     style={{ flex: 1, marginBottom: 0 }}
                   >
-                    <Select
-                      showSearch
+                    <RemoteSelect<Customer>
+                      searchPath="/customers"
+                      mapOption={(c) => ({ value: c.id, label: c.name })}
+                      extraOptions={customers.map((c) => ({ value: c.id, label: c.name }))}
                       placeholder="Select customer"
-                      options={customers.map((c) => ({ value: c.id, label: c.name }))}
-                      filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
                     />
                   </Form.Item>
                   {canCreateCustomer && (

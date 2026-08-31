@@ -4,13 +4,13 @@ import { FilePdfOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { Dayjs } from "dayjs";
 import { api } from "../api/client";
+import { RemoteSelect } from "../components/RemoteSelect";
 import {
   BalanceSheetResult,
   BalanceSheetRow,
   CashFlowResult,
   ChartOfAccount,
   Company,
-  Customer,
   GeneralLedgerEntry,
   GeneralLedgerResult,
   GstSummaryResult,
@@ -19,7 +19,6 @@ import {
   ProfitAndLossRow,
   TrialBalanceResult,
   TrialBalanceRow,
-  Vendor,
 } from "../types";
 
 const { RangePicker } = DatePicker;
@@ -28,18 +27,14 @@ function formatMoney(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function useCompaniesAndParties() {
+function useCompanies() {
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [vendors, setVendors] = useState<Vendor[]>([]);
 
   useEffect(() => {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
-    api.get<{ data: Customer[] }>("/customers?perPage=500").then((res) => setCustomers(res.data)).catch(() => {});
-    api.get<{ data: Vendor[] }>("/vendors?perPage=500").then((res) => setVendors(res.data)).catch(() => {});
   }, []);
 
-  return { companies, customers, vendors };
+  return { companies };
 }
 
 interface DayBookEntry {
@@ -154,7 +149,7 @@ interface PartyLedgerEntry {
   balance: number;
 }
 
-function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors: Vendor[] }) {
+function PartyLedgerTab() {
   const [partyType, setPartyType] = useState<"customer" | "vendor">("customer");
   const [partyId, setPartyId] = useState<number | undefined>();
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
@@ -189,9 +184,6 @@ function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partyId, range]);
 
-  const partyOptions =
-    partyType === "customer" ? customers.map((c) => ({ value: c.id, label: c.name })) : vendors.map((v) => ({ value: v.id, label: v.name }));
-
   // Opens the PDF in a new tab, exactly like every other document's
   // "Download PDF" button in this app - the browser's own PDF viewer then
   // covers both printing and saving from there.
@@ -222,13 +214,13 @@ function PartyLedgerTab({ customers, vendors }: { customers: Customer[]; vendors
           <Radio.Button value="customer">Customer</Radio.Button>
           <Radio.Button value="vendor">Vendor</Radio.Button>
         </Radio.Group>
-        <Select
+        <RemoteSelect<{ id: number; name: string }>
+          key={partyType}
+          searchPath={partyType === "customer" ? "/customers" : "/vendors"}
+          mapOption={(p) => ({ value: p.id, label: p.name })}
           placeholder={`Select ${partyType}`}
           style={{ width: 240 }}
           value={partyId}
-          showSearch
-          options={partyOptions}
-          filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
           onChange={setPartyId}
         />
         <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
@@ -1129,7 +1121,7 @@ function CashFlowTab({ companies }: { companies: Company[] }) {
 }
 
 export function ReportsPage() {
-  const { companies, customers, vendors } = useCompaniesAndParties();
+  const { companies } = useCompanies();
 
   return (
     <div>
@@ -1140,7 +1132,7 @@ export function ReportsPage() {
         defaultActiveKey="day-book"
         items={[
           { key: "day-book", label: "Day Book", children: <DayBookTab companies={companies} /> },
-          { key: "party-ledger", label: "Party Ledger", children: <PartyLedgerTab customers={customers} vendors={vendors} /> },
+          { key: "party-ledger", label: "Party Ledger", children: <PartyLedgerTab /> },
           { key: "profit-loss", label: "Profit & Loss", children: <ProfitLossTab companies={companies} /> },
           { key: "gst-summary", label: "GST Summary", children: <GstSummaryTab companies={companies} /> },
           { key: "outstanding", label: "Outstanding", children: <OutstandingTab companies={companies} /> },
