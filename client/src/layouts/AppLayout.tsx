@@ -303,13 +303,23 @@ export function AppLayout() {
     }
   }
 
+  // Collapsing the sidebar also clears openKeys - otherwise whichever
+  // section was expanded inline stays "open" as far as the Menu is
+  // concerned, and its flyout would appear immediately at the new icon-only
+  // width instead of only on hover. Expanding back doesn't need the
+  // opposite treatment - starting with nothing open is fine either way.
+  function setCollapsedState(next: boolean) {
+    setCollapsed(next);
+    if (next) setOpenKeys([]);
+  }
+
   function renderMenu(inlineCollapsed: boolean) {
     return (
       <Menu
         mode="inline"
         inlineCollapsed={inlineCollapsed}
         selectedKeys={[selectedKey]}
-        openKeys={inlineCollapsed ? [] : openKeys}
+        openKeys={openKeys}
         onOpenChange={handleOpenChange}
         items={navItems}
         onClick={({ key }) => {
@@ -337,7 +347,7 @@ export function AppLayout() {
           width={220}
           collapsible
           collapsed={collapsed}
-          onCollapse={setCollapsed}
+          onCollapse={setCollapsedState}
           trigger={null}
           style={{ borderInlineEnd: "1px solid #f0f0f0", overflow: "auto" }}
         >
@@ -381,7 +391,7 @@ export function AppLayout() {
               <Button
                 type="text"
                 icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                onClick={() => setCollapsed((prev) => !prev)}
+                onClick={() => setCollapsedState(!collapsed)}
                 title={collapsed ? "Expand menu" : "Collapse menu"}
               />
             )}
