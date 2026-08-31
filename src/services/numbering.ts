@@ -46,9 +46,25 @@ export async function getNextDocNumber(docType: SeriesType, companyCode: string,
     const [rows] = await conn.query<any[]>("SELECT LAST_INSERT_ID() as seq");
     const seq = Number(rows[0].seq);
 
-    const docNumber = `${PREFIXES[docType]}/${companyCode}/${financialYear}/${String(seq).padStart(4, "0")}`;
+    const docNumber = formatDocNumber(docType, companyCode, financialYear, seq);
     return { docNumber, financialYear, seq };
   } finally {
     conn.release();
   }
+}
+
+/**
+ * Tax Invoice follows the company's own required numbering convention -
+ * "{companyCode}-{seq}/{financialYear}" (e.g. "JI-001/26-27",
+ * "JE-001/26-27"), 3-digit sequence, no doc-type prefix. Every other
+ * series (quotation, proforma, delivery challan, receipt, expense,
+ * vendor payment, purchase bill/order) keeps the original
+ * "{PREFIX}/{companyCode}/{financialYear}/{seq}" shape, 4-digit sequence -
+ * unchanged, since only the invoice format was specified as wrong.
+ */
+function formatDocNumber(docType: SeriesType, companyCode: string, financialYear: string, seq: number): string {
+  if (docType === "tax_invoice") {
+    return `${companyCode}-${String(seq).padStart(3, "0")}/${financialYear}`;
+  }
+  return `${PREFIXES[docType]}/${companyCode}/${financialYear}/${String(seq).padStart(4, "0")}`;
 }
