@@ -243,6 +243,9 @@ export interface Receipt {
   customer_name?: string;
   tax_invoice_id: number | null;
   invoice_number?: string;
+  /** Only present on the list endpoint - how many invoices this receipt was
+   * split across (0 for a pure on-account payment). */
+  allocation_count?: number;
   account_id: number | null;
   account_name?: string;
   amount: string;
@@ -252,6 +255,29 @@ export interface Receipt {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  /** Only present on list/detail responses - how this receipt was split
+   * across invoices (empty means a pure on-account/advance payment). */
+  allocations?: ReceiptAllocation[];
+}
+
+export interface ReceiptAllocation {
+  id: number;
+  receipt_id: number;
+  tax_invoice_id: number;
+  amount: string;
+  /** Only present when joined for display. */
+  invoice_number?: string;
+}
+
+/** One row on the "outstanding invoices for this customer" list the New
+ * Receipt flow uses to auto-allocate a payment oldest-invoice-first. */
+export interface OutstandingInvoice {
+  id: number;
+  doc_number: string;
+  issue_date: string;
+  grand_total: number;
+  paid_amount: number;
+  balance_due: number;
 }
 
 export interface Vendor {

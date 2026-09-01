@@ -214,6 +214,9 @@ export interface Receipt {
   financial_year: string;
   company_id: number;
   customer_id: number;
+  /** Still written for a simple single-invoice receipt, but no longer
+   * authoritative for what the receipt was applied to - see
+   * receipt_allocations and schema.sql's comment on it. */
   tax_invoice_id: number | null;
   account_id: number | null;
   amount: string;
@@ -224,6 +227,34 @@ export interface Receipt {
   created_by: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/** How much of one Receipt was applied against one Tax Invoice - a receipt
+ * with no allocation rows at all is a pure on-account/advance payment. The
+ * leftover of an overpayment (receipt.amount minus the sum of its own
+ * allocations) is never given its own row - it's always computed, never
+ * stored. */
+export interface ReceiptAllocation {
+  id: number;
+  receipt_id: number;
+  tax_invoice_id: number;
+  amount: string;
+  created_at: string;
+  /** Only present when joined for display - see receipts.ts's findAllocations. */
+  invoice_number?: string;
+}
+
+/** One row on the "outstanding invoices for this customer" list the New
+ * Receipt flow uses to auto-allocate a payment oldest-invoice-first -
+ * balance_due is already net of both prior receipts (via
+ * receipt_allocations) and non-cancelled Credit Notes. */
+export interface OutstandingInvoice {
+  id: number;
+  doc_number: string;
+  issue_date: string;
+  grand_total: number;
+  paid_amount: number;
+  balance_due: number;
 }
 
 export interface Vendor {

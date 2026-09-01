@@ -1,7 +1,7 @@
 import path from "path";
 import PDFDocument from "pdfkit";
 import { Response } from "express";
-import { Company, Customer, Receipt, DocumentRecord, PaymentMode } from "../../types";
+import { Company, Customer, Receipt, ReceiptAllocation, PaymentMode } from "../../types";
 import { amountInWords } from "../../utils/numberToWords";
 
 const PAGE_MARGIN = 40;
@@ -31,6 +31,10 @@ function formatMoney(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
   cash: "Cash",
   cheque: "Cheque",
@@ -45,7 +49,7 @@ export function streamReceiptPdf(
   receipt: Receipt,
   customer: Customer,
   company: Company,
-  invoice: DocumentRecord | null
+  allocations: ReceiptAllocation[]
 ) {
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN });
   res.setHeader("Content-Type", "application/pdf");
@@ -108,10 +112,26 @@ export function streamReceiptPdf(
   }
   y = Math.max(doc.y, y + 14) + 4;
 
-  if (invoice) {
+  if (allocations.length === 1) {
     doc.fontSize(9).fillColor(MUTED).text("Against Invoice: ", CONTENT_LEFT, y, { continued: true, width: colWidth });
-    doc.fillColor(DARK).text(`${invoice.doc_number} (${formatDate(invoice.issue_date)})`, { width: colWidth });
+    doc.fillColor(DARK).text(allocations[0].invoice_number ?? "", { width: colWidth });
     y = doc.y + 14;
+  } else if (allocations.length > 1) {
+    doc.fontSize(9).fillColor(MUTED).text("Applied To:", CONTENT_LEFT, y);
+    y = doc.y + 4;
+    const applied = round2(allocations.reduce((s, a) => s + Number(a.amount), 0));
+    const unallocated = round2(Number(receipt.amount) - applied);
+    for (const a of allocations) {
+      doc.fontSize(9).fillColor(DARK).text(a.invoice_number ?? "", CONTENT_LEFT + 8, y, { continued: true, width: colWidth });
+      doc.fillColor(GRAY).text(`Rs. ${formatMoney(Number(a.amount))}`, { width: colWidth, align: "right" });
+      y = doc.y + 2;
+    }
+    if (unallocated > 0.01) {
+      doc.fontSize(9).fillColor(MUTED).text("On Account (unapplied)", CONTENT_LEFT + 8, y, { continued: true, width: colWidth });
+      doc.fillColor(GRAY).text(`Rs. ${formatMoney(unallocated)}`, { width: colWidth, align: "right" });
+      y = doc.y + 2;
+    }
+    y += 12;
   }
 
   if (receipt.notes) {

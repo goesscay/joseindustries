@@ -223,7 +223,7 @@ reportsRouter.get(
 
     const [receivables] = await pool.query<any[]>(
       `SELECT d.id, d.doc_number, d.issue_date, d.grand_total,
-              COALESCE((SELECT SUM(r.amount) FROM receipts r WHERE r.tax_invoice_id = d.id), 0)
+              COALESCE((SELECT SUM(ra.amount) FROM receipt_allocations ra WHERE ra.tax_invoice_id = d.id), 0)
                 + COALESCE((SELECT SUM(cn.grand_total) FROM credit_notes cn WHERE cn.tax_invoice_id = d.id AND cn.status != 'cancelled'), 0)
                 as paid_amount,
               c.name as customer_name

@@ -12,15 +12,16 @@ import {
   message,
   Popconfirm,
   Typography,
+  Tag,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "../components/QuickAddCustomerModal";
 import { RemoteSelect } from "../components/RemoteSelect";
-import { Account, Company, Customer, PaymentMode, Receipt, SalesDocument } from "../types";
+import { Account, Company, Customer, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation } from "../types";
 
 const PAGE_SIZE = 10;
 
@@ -33,6 +34,36 @@ const PAYMENT_MODE_OPTIONS: { value: PaymentMode; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function formatMoney(n: number): string {
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// One row of the "auto-allocate against outstanding invoices" table in the
+// New Receipt modal - `applied` starts out oldest-invoice-first via
+// autoFillOldestFirst, but the user can edit it directly afterward (an
+// explicit override, never silently overwritten again unless they change
+// the Amount Received field or hit Reset).
+interface AllocationRow {
+  tax_invoice_id: number;
+  doc_number: string;
+  issue_date: string;
+  balance_due: number;
+  applied: number;
+}
+
+function autoFillOldestFirst(rows: AllocationRow[], amount: number): AllocationRow[] {
+  let remaining = amount;
+  return rows.map((r) => {
+    const applied = round2(Math.max(0, Math.min(r.balance_due, remaining)));
+    remaining = round2(remaining - applied);
+    return { ...r, applied };
+  });
+}
+
 export function ReceiptsPage() {
   const { user, can } = useAuth();
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -44,7 +75,6 @@ export function ReceiptsPage() {
 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [invoices, setInvoices] = useState<SalesDocument[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -53,12 +83,16 @@ export function ReceiptsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
+  const [allocationRows, setAllocationRows] = useState<AllocationRow[]>([]);
+  const [invoicesLoading, setInvoicesLoading] = useState(false);
+
   const canCreate = can("sales.receipts", "create");
   const canEdit = can("sales.receipts", "edit");
   const canDelete = can("sales.receipts", "delete");
   const canCreateCustomer = can("contacts.customers", "create");
   const selectedCustomerId = Form.useWatch("customer_id", form);
   const selectedCompanyId = Form.useWatch("company_id", form);
+  const amount = Form.useWatch("amount", form);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,39 +116,66 @@ export function ReceiptsPage() {
 
   useEffect(() => {
     api.get<{ data: Company[] }>("/companies").then((res) => setCompanies(res.data)).catch(() => {});
-    // No bulk customer preload anymore - the Customer field's RemoteSelect
-    // below searches the server directly; `customers` here now only ever
-    // holds the specific records that must stay selectable regardless of
-    // search text - see ensureCustomerLoaded and the QuickAddCustomerModal
-    // callback further down.
-    api
-      .get<{ data: SalesDocument[] }>("/tax-invoices?perPage=200")
-      .then((res) => setInvoices(res.data))
-      .catch(() => {});
     api.get<{ data: Account[] }>("/accounts").then((res) => setAccounts(res.data)).catch(() => {});
   }, []);
-
-  const invoiceOptions = invoices
-    .filter((inv) => !selectedCustomerId || inv.customer_id === selectedCustomerId)
-    .map((inv) => {
-      const balance = Number(inv.grand_total) - Number(inv.paid_amount ?? 0);
-      return { value: inv.id, label: `${inv.doc_number} - Balance Rs. ${balance.toFixed(2)}` };
-    });
 
   const accountOptions = accounts
     .filter((a) => !selectedCompanyId || a.company_id === selectedCompanyId)
     .map((a) => ({ value: a.id, label: a.name }));
 
-  function openCreate() {
-    setEditing(null);
-    form.resetFields();
-    form.setFieldsValue({
-      received_date: dayjs(),
-      company_id: companies[0]?.id,
-      payment_mode: "cash",
-    });
-    setModalOpen(true);
+  // Fetches this customer's outstanding invoices (net of prior receipts and
+  // Credit Notes - see receipts.ts's getOutstandingInvoices) whenever the
+  // Company or Customer changes, then auto-fills oldest-invoice-first
+  // against whatever Amount Received is already entered (0 the first time,
+  // or the receipt's own existing amount when opening it for edit).
+  const loadOutstandingInvoices = useCallback(
+    async (companyId: number, customerId: number, keepApplied?: Map<number, number>) => {
+      setInvoicesLoading(true);
+      try {
+        const excludeParam = editing ? `&exclude_receipt_id=${editing.id}` : "";
+        const res = await api.get<{ data: OutstandingInvoice[] }>(
+          `/receipts/outstanding-invoices?company_id=${companyId}&customer_id=${customerId}${excludeParam}`
+        );
+        const rows: AllocationRow[] = res.data.map((inv) => ({
+          tax_invoice_id: inv.id,
+          doc_number: inv.doc_number,
+          issue_date: inv.issue_date,
+          balance_due: inv.balance_due,
+          applied: keepApplied?.get(inv.id) ?? 0,
+        }));
+        setAllocationRows(keepApplied ? rows : autoFillOldestFirst(rows, Number(form.getFieldValue("amount")) || 0));
+      } catch (err) {
+        message.error(err instanceof Error ? err.message : "Failed to load outstanding invoices");
+        setAllocationRows([]);
+      } finally {
+        setInvoicesLoading(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editing]
+  );
+
+  useEffect(() => {
+    if (selectedCompanyId && selectedCustomerId) {
+      loadOutstandingInvoices(selectedCompanyId, selectedCustomerId);
+    } else {
+      setAllocationRows([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompanyId, selectedCustomerId]);
+
+  function reapplyAmountToRows(newAmount: number) {
+    setAllocationRows((prev) => autoFillOldestFirst(prev, newAmount));
   }
+
+  function updateRowApplied(taxInvoiceId: number, value: number) {
+    setAllocationRows((prev) =>
+      prev.map((r) => (r.tax_invoice_id === taxInvoiceId ? { ...r, applied: Math.max(0, Math.min(r.balance_due, value)) } : r))
+    );
+  }
+
+  const totalApplied = round2(allocationRows.reduce((s, r) => s + r.applied, 0));
+  const unallocated = round2((Number(amount) || 0) - totalApplied);
 
   // The customer dropdown is only ever populated from the first page of
   // /customers (capped server-side at 100 rows) - a customer sitting
@@ -134,13 +195,24 @@ export function ReceiptsPage() {
     }
   }
 
+  function openCreate() {
+    setEditing(null);
+    form.resetFields();
+    form.setFieldsValue({
+      received_date: dayjs(),
+      company_id: companies[0]?.id,
+      payment_mode: "cash",
+    });
+    setAllocationRows([]);
+    setModalOpen(true);
+  }
+
   async function openEdit(record: Receipt) {
     await ensureCustomerLoaded(record.customer_id);
     setEditing(record);
     form.setFieldsValue({
       company_id: record.company_id,
       customer_id: record.customer_id,
-      tax_invoice_id: record.tax_invoice_id,
       account_id: record.account_id,
       amount: Number(record.amount),
       payment_mode: record.payment_mode,
@@ -149,13 +221,21 @@ export function ReceiptsPage() {
       notes: record.notes,
     });
     setModalOpen(true);
+    try {
+      const res = await api.get<{ receipt: Receipt; allocations: ReceiptAllocation[] }>(`/receipts/${record.id}`);
+      const keepApplied = new Map(res.allocations.map((a) => [a.tax_invoice_id, Number(a.amount)]));
+      await loadOutstandingInvoices(record.company_id, record.customer_id, keepApplied);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to load this receipt's invoice allocations");
+    }
   }
 
   async function handleSubmit() {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      const payload = { ...values, received_date: values.received_date.format("YYYY-MM-DD") };
+      const allocations = allocationRows.filter((r) => r.applied > 0).map((r) => ({ tax_invoice_id: r.tax_invoice_id, amount: r.applied }));
+      const payload = { ...values, received_date: values.received_date.format("YYYY-MM-DD"), allocations };
       if (editing) {
         const { journal } = await api.put<{ journal: { id: number } | null }>(`/receipts/${editing.id}`, payload);
         message.success(journal ? `Receipt updated (Journal #${journal.id} posted)` : "Receipt updated");
@@ -190,7 +270,12 @@ export function ReceiptsPage() {
     { title: "No.", dataIndex: "receipt_no", key: "receipt_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
     { title: "Customer", dataIndex: "customer_name", key: "customer_name" },
-    { title: "Against Invoice", dataIndex: "invoice_number", key: "invoice_number", render: (v) => v || "-" },
+    {
+      title: "Against Invoice",
+      key: "invoice_number",
+      render: (_, r) =>
+        Number(r.allocation_count ?? 0) > 1 ? <Tag>{r.allocation_count} invoices</Tag> : r.invoice_number || "-",
+    },
     {
       title: "Date",
       dataIndex: "received_date",
@@ -282,7 +367,7 @@ export function ReceiptsPage() {
         onCancel={() => setModalOpen(false)}
         onOk={handleSubmit}
         confirmLoading={saving}
-        width={560}
+        width={720}
         destroyOnClose
       >
         <Form form={form} layout="vertical" size="middle">
@@ -305,7 +390,6 @@ export function ReceiptsPage() {
                   mapOption={(c) => ({ value: c.id, label: c.name })}
                   extraOptions={customers.map((c) => ({ value: c.id, label: c.name }))}
                   placeholder="Select customer"
-                  onChange={() => form.setFieldsValue({ tax_invoice_id: undefined })}
                 />
               </Form.Item>
               {canCreateCustomer && (
@@ -313,12 +397,72 @@ export function ReceiptsPage() {
               )}
             </div>
           </Form.Item>
-          <Form.Item name="tax_invoice_id" label="Against Tax Invoice (optional)">
-            <Select allowClear showSearch placeholder="Select invoice" options={invoiceOptions} filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())} />
+          <Form.Item
+            name="amount"
+            label="Amount Received"
+            rules={[{ required: true, message: "Amount is required" }]}
+          >
+            <InputNumber
+              style={{ width: "100%" }}
+              min={0.01}
+              onChange={(v) => reapplyAmountToRows(Number(v) || 0)}
+            />
           </Form.Item>
-          <Form.Item name="amount" label="Amount Received" rules={[{ required: true, message: "Amount is required" }]}>
-            <InputNumber style={{ width: "100%" }} min={0.01} />
-          </Form.Item>
+
+          {selectedCustomerId && (
+            <div style={{ marginBottom: 16 }}>
+              <Space style={{ marginBottom: 8, width: "100%", justifyContent: "space-between" }}>
+                <Typography.Text strong>Apply Against Outstanding Invoices</Typography.Text>
+                <Button
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  onClick={() => reapplyAmountToRows(Number(amount) || 0)}
+                >
+                  Reset to Auto (Oldest First)
+                </Button>
+              </Space>
+              <Table
+                rowKey="tax_invoice_id"
+                size="small"
+                pagination={false}
+                loading={invoicesLoading}
+                dataSource={allocationRows}
+                locale={{ emptyText: "No outstanding invoices for this customer" }}
+                columns={[
+                  { title: "Invoice", dataIndex: "doc_number", key: "doc_number" },
+                  { title: "Date", dataIndex: "issue_date", key: "issue_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
+                  { title: "Balance Due", dataIndex: "balance_due", key: "balance_due", align: "right", render: (v: number) => formatMoney(v) },
+                  {
+                    title: "Amount to Apply",
+                    key: "applied",
+                    width: 160,
+                    render: (_, row) => (
+                      <InputNumber
+                        style={{ width: "100%" }}
+                        min={0}
+                        max={row.balance_due}
+                        value={row.applied}
+                        onChange={(v) => updateRowApplied(row.tax_invoice_id, Number(v) || 0)}
+                      />
+                    ),
+                  },
+                ]}
+              />
+              <div style={{ marginTop: 8, textAlign: "right" }}>
+                <Typography.Text type="secondary">Applied: Rs. {formatMoney(totalApplied)}</Typography.Text>
+                {"  "}
+                <Typography.Text type={unallocated > 0.01 ? "warning" : "secondary"} strong={unallocated > 0.01}>
+                  {unallocated > 0.01 ? `On Account (unapplied): Rs. ${formatMoney(unallocated)}` : ""}
+                </Typography.Text>
+                {unallocated < -0.01 && (
+                  <Typography.Text type="danger" strong>
+                    Applied exceeds amount received by Rs. {formatMoney(-unallocated)}
+                  </Typography.Text>
+                )}
+              </div>
+            </div>
+          )}
+
           <Form.Item name="payment_mode" label="Payment Mode" rules={[{ required: true }]}>
             <Select options={PAYMENT_MODE_OPTIONS} />
           </Form.Item>

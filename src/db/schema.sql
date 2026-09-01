@@ -1400,3 +1400,50 @@ CREATE TABLE IF NOT EXISTS financial_year_closings (
 );
 
 ALTER TABLE financial_year_closings ADD INDEX IF NOT EXISTS idx_fy_closings_company_status (company_id, status, end_date);
+
+-- ============================================================================
+-- Receipts enhancement: one Receipt (one real-world payment - the Party
+-- Ledger already shows exactly one row per receipt, and Phase B's
+-- postReceiptJournalTx already posts one simple Dr Bank/Cr Accounts
+-- Receivable journal regardless of which invoice(s) it settles, since
+-- Accounts Receivable is one pooled account, not tracked per-invoice at the
+-- ledger level) can now be split across MULTIPLE Tax Invoices instead of
+-- just the one `receipts.tax_invoice_id` could ever reference - e.g. a
+-- customer clearing several months of invoices with a single bank
+-- transfer, applied oldest-invoice-first.
+--
+-- `receipts.tax_invoice_id` is kept exactly as-is (still written for a
+-- simple single-invoice receipt, for any code that hasn't moved onto the
+-- new table) but is no longer the authoritative record of what a receipt
+-- was applied to - `receipt_allocations` is. A receipt with zero allocation
+-- rows is a pure on-account/advance payment, same meaning
+-- `tax_invoice_id IS NULL` already had. The leftover of an overpayment
+-- (amount received minus what was actually applied to invoices) is never
+-- given its own row - it's implicit: `receipts.amount` minus the sum of
+-- that receipt's own allocations.
+--
+-- The one-time backfill below gives every EXISTING receipt that already
+-- has a tax_invoice_id a matching allocation row, so every invoice's
+-- paid-amount can be computed the same way (SUM from receipt_allocations)
+-- everywhere going forward, with no dual-path "check the old column too"
+-- logic left in any query. Idempotent via the NOT EXISTS guard - safe to
+-- re-run on every migrate.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS receipt_allocations (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  receipt_id INT UNSIGNED NOT NULL,
+  tax_invoice_id INT UNSIGNED NOT NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (receipt_id) REFERENCES receipts(id) ON DELETE CASCADE,
+  FOREIGN KEY (tax_invoice_id) REFERENCES documents(id)
+);
+
+ALTER TABLE receipt_allocations ADD INDEX IF NOT EXISTS idx_receipt_allocations_invoice (tax_invoice_id);
+
+INSERT INTO receipt_allocations (receipt_id, tax_invoice_id, amount)
+SELECT r.id, r.tax_invoice_id, r.amount
+FROM receipts r
+WHERE r.tax_invoice_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM receipt_allocations ra WHERE ra.receipt_id = r.id);

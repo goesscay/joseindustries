@@ -150,8 +150,21 @@ export function createSalesDocumentRouter(
 
   const MODULE = MODULE_BY_DOC_TYPE[docType] ?? "sales.quotations";
   const createGuard = options.createRoles ? [requireRole(...options.createRoles)] : [];
+  // Receipts enhancement: sourced from receipt_allocations (one receipt can
+  // now settle several invoices, and the legacy receipts.tax_invoice_id
+  // column is no longer authoritative - see schema.sql's comment on
+  // receipt_allocations) rather than receipts directly, and now also nets
+  // out non-cancelled Credit Notes - a real pre-existing bug fixed here:
+  // this figure previously ignored Credit Notes entirely, so an invoice's
+  // displayed balance (including in the old Receipts page's invoice
+  // dropdown) could overstate what a customer actually still owed once any
+  // Credit Note existed against it. reports.ts's Outstanding report already
+  // got the Credit Notes term right; this brings the invoice list/detail
+  // endpoints' own paid_amount into agreement with it.
   const paymentSelect = options.includePaymentSummary
-    ? ", COALESCE((SELECT SUM(r.amount) FROM receipts r WHERE r.tax_invoice_id = d.id), 0) as paid_amount"
+    ? `, COALESCE((SELECT SUM(ra.amount) FROM receipt_allocations ra WHERE ra.tax_invoice_id = d.id), 0)
+         + COALESCE((SELECT SUM(cn.grand_total) FROM credit_notes cn WHERE cn.tax_invoice_id = d.id AND cn.status != 'cancelled'), 0)
+         as paid_amount`
     : "";
 
   async function findById(id: number): Promise<DocumentRecord | undefined> {
