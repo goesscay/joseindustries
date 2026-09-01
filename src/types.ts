@@ -649,6 +649,42 @@ export interface BankReconciliationWorksheet {
   difference: number;
 }
 
+// ---- Double-entry rollout, Phase F: Fixed Assets + Depreciation - see
+// schema.sql's comment on fixed_assets for the full design. ----
+
+export type FixedAssetStatus = "active" | "disposed";
+export type DepreciationMethod = "straight_line";
+
+export interface FixedAsset {
+  id: number;
+  asset_no: string;
+  financial_year: string;
+  company_id: number;
+  asset_name: string;
+  category: string | null;
+  purchase_date: string;
+  cost: string;
+  salvage_value: string;
+  useful_life_months: number;
+  depreciation_method: DepreciationMethod;
+  status: FixedAssetStatus;
+  disposal_date: string | null;
+  disposal_amount: string | null;
+  notes: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FixedAssetDepreciationEntry {
+  id: number;
+  fixed_asset_id: number;
+  period_end_date: string;
+  amount: string;
+  created_by: number | null;
+  created_at: string;
+}
+
 declare global {
   namespace Express {
     interface Request {

@@ -38,6 +38,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   // is ready for it once a Chart of Accounts screen is built.
   { key: "accounting.chart_of_accounts", label: "Chart of Accounts", group: "Accounting" },
   { key: "accounting.journals", label: "Journals", group: "Accounting" },
+  { key: "accounting.fixed_assets", label: "Fixed Assets", group: "Accounting" },
 
   { key: "contacts.customers", label: "Customers", group: "Contacts" },
   { key: "contacts.vendors", label: "Vendors", group: "Contacts" },

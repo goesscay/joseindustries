@@ -26,6 +26,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { BankReconciliationPage } from "./pages/BankReconciliationPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { JournalEntriesPage } from "./pages/JournalEntriesPage";
+import { FixedAssetsPage } from "./pages/FixedAssetsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { GstReturnsPage } from "./pages/GstReturnsPage";
 import { StockLevelsPage, StockLedgerPage, OpeningStockPage, StockAdjustmentsPage, InventoryValuationPage } from "./pages/InventoryPage";
@@ -140,6 +141,14 @@ function App() {
             element={
               <ModuleGate module="accounting.journals">
                 <JournalEntriesPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/accounting/fixed-assets"
+            element={
+              <ModuleGate module="accounting.fixed_assets">
+                <FixedAssetsPage />
               </ModuleGate>
             }
           />

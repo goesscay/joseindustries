@@ -12,7 +12,8 @@ export type SeriesType =
   | "purchase_bill"
   | "purchase_order"
   | "credit_note"
-  | "debit_note";
+  | "debit_note"
+  | "fixed_asset";
 
 const PREFIXES: Record<SeriesType, string> = {
   quotation: "QTN",
@@ -26,6 +27,7 @@ const PREFIXES: Record<SeriesType, string> = {
   purchase_order: "PO",
   credit_note: "CN",
   debit_note: "DN",
+  fixed_asset: "FA",
 };
 
 /**

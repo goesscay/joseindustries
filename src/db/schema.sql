@@ -620,6 +620,20 @@ SELECT id, '1150', 'Other Current Assets', 'asset', 'Other Current Assets', 'deb
 INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
 SELECT id, '1200', 'Fixed Assets', 'asset', 'Fixed Assets', 'debit', TRUE FROM companies;
 
+-- Double-entry rollout, Phase F: a contra-asset sibling of 1200 (not a
+-- child of it - both sit directly under 1000 Assets, same as how 1130/1140
+-- sit under 1100). Its normal_balance is 'credit', the first contra-asset
+-- account this schema has ever seeded - getBalanceSheet/getTrialBalance
+-- both already handle this correctly with zero code changes needed: a
+-- credit balance nets to a negative `amount` under the (always-summed,
+-- never normal_balance-branched) 'asset' row logic, which correctly
+-- SUBTRACTS from Total Assets instead of adding to it. 1200 itself keeps
+-- recording every fixed asset's cost exactly as before (one shared leaf for
+-- all assets, same convention Inventory/Accounts Receivable already use -
+-- not one dedicated leaf per asset).
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '1210', 'Accumulated Depreciation', 'asset', 'Accumulated Depreciation', 'credit', TRUE FROM companies;
+
 INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
 SELECT id, '2000', 'Liabilities', 'liability', NULL, 'credit', TRUE FROM companies;
 INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
@@ -671,6 +685,10 @@ INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_ty
 SELECT id, '5800', 'Bank Charges', 'expense', 'Bank Charges', 'debit', TRUE FROM companies;
 INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
 SELECT id, '5900', 'Other Expenses', 'expense', 'Other Expenses', 'debit', TRUE FROM companies;
+-- Phase F: the Dr side of every depreciation posting (Cr always goes to
+-- 1210 Accumulated Depreciation above).
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5950', 'Depreciation', 'expense', 'Depreciation', 'debit', TRUE FROM companies;
 
 -- Wire up the parent/child hierarchy now that every row above exists (can't
 -- self-reference a sibling's id in the same INSERT). Safe to re-run - it's
@@ -691,7 +709,7 @@ UPDATE chart_of_accounts child
 JOIN chart_of_accounts parent
   ON parent.company_id = child.company_id AND parent.account_code = '1000'
 SET child.parent_id = parent.id
-WHERE child.account_code = '1200';
+WHERE child.account_code IN ('1200', '1210');
 
 UPDATE chart_of_accounts child
 JOIN chart_of_accounts parent
@@ -727,7 +745,7 @@ UPDATE chart_of_accounts child
 JOIN chart_of_accounts parent
   ON parent.company_id = child.company_id AND parent.account_code = '5000'
 SET child.parent_id = parent.id
-WHERE child.account_code IN ('5100', '5200', '5300', '5400', '5500', '5600', '5700', '5800', '5900');
+WHERE child.account_code IN ('5100', '5200', '5300', '5400', '5500', '5600', '5700', '5800', '5900', '5950');
 
 -- Optional link from an existing Bank & Cash account (accounts.ts) to the
 -- Chart-of-Accounts leaf it corresponds to, for when journal-posting is
@@ -1237,3 +1255,88 @@ CREATE TABLE IF NOT EXISTS bank_reconciliations (
 );
 
 ALTER TABLE bank_reconciliations ADD INDEX IF NOT EXISTS idx_bank_reconciliations_account (account_id, statement_date);
+
+-- ============================================================================
+-- Double-entry rollout, Phase F: Fixed Assets + Depreciation. A register of
+-- one company's long-lived assets (furniture, computers, vehicles,
+-- machinery...), each posting three kinds of real journals over its
+-- lifetime: acquisition (once), depreciation (repeatedly, one journal per
+-- period run - see fixed_asset_depreciation_entries), and disposal (once,
+-- terminal). See src/services/accounting.ts's Phase F posting functions and
+-- src/routes/fixedAssets.ts for the full design.
+--
+-- Deliberately its own dedicated tables, not wired into Purchase Bills -
+-- capitalizing a bill line as a fixed asset automatically would touch
+-- purchaseBills.ts's already-large, working routing/journal logic for a
+-- feature that doesn't need that integration to be useful. A Fixed Asset is
+-- entered directly here, with the user choosing whichever Chart of Accounts
+-- leaf received the money (Bank, Cash, Accounts Payable, Capital...) as its
+-- acquisition contra - the same "pick any true-leaf contra account" pattern
+-- src/routes/bankCashEntries.ts already established for plain Bank & Cash
+-- Entries.
+--
+-- Depreciation is straight-line only in this phase (cost - salvage_value)
+-- spread evenly over useful_life_months, with NO day-level proration for a
+-- partial first/last month - a deliberate simplification (Schedule
+-- II-style pro-rata depreciation is real added complexity this phase
+-- doesn't take on). A "run" posts one full month's depreciation for every
+-- active asset that hasn't already got an entry for that exact
+-- period_end_date, clamped so accumulated depreciation across an asset's
+-- lifetime can never exceed (cost - salvage_value) - the final period's
+-- entry is silently smaller than a full month's share whenever the
+-- straight-line amount would overshoot.
+--
+-- fixed_assets.status is NOT reused as a "can this still be edited" gate
+-- the way credit_notes/debit_notes' status is - there is no PUT at all here
+-- (see fixedAssets.ts's comment on why cost/dates/useful_life are
+-- immutable once set). 'disposed' only ever means "no further depreciation
+-- will ever be posted for this asset" - src/routes/fixedAssets.ts's
+-- depreciation-run query filters on status = 'active' for exactly that
+-- reason.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS fixed_assets (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  asset_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  asset_name VARCHAR(255) NOT NULL,
+  category VARCHAR(100) NULL,
+  purchase_date DATE NOT NULL,
+  cost DECIMAL(12, 2) NOT NULL,
+  salvage_value DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  useful_life_months INT UNSIGNED NOT NULL,
+  depreciation_method ENUM('straight_line') NOT NULL DEFAULT 'straight_line',
+  status ENUM('active', 'disposed') NOT NULL DEFAULT 'active',
+  disposal_date DATE NULL,
+  disposal_amount DECIMAL(12, 2) NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_asset_no (asset_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- One row per (asset, period) depreciation posting - the idempotency key
+-- that makes "run depreciation for period X" safe to click twice (the
+-- unique key rejects a duplicate for the same asset+period outright,
+-- caught at the application layer before the INSERT is even attempted so
+-- the user sees "already depreciated for this period", not a raw
+-- duplicate-key error). Only the single latest entry for an asset may ever
+-- be deleted (reverses its journal) - deleting an older one while later
+-- ones exist would leave a gap in an otherwise-contiguous schedule, so
+-- src/routes/fixedAssets.ts enforces that ordering rule at the application
+-- layer; there's no DB constraint that could express "latest per group".
+CREATE TABLE IF NOT EXISTS fixed_asset_depreciation_entries (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  fixed_asset_id INT UNSIGNED NOT NULL,
+  period_end_date DATE NOT NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_asset_period (fixed_asset_id, period_end_date),
+  FOREIGN KEY (fixed_asset_id) REFERENCES fixed_assets(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);

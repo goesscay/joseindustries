@@ -929,3 +929,55 @@ export interface BankReconciliationWorksheet {
   clearedTotal: number;
   difference: number;
 }
+
+// ---- Double-entry rollout, Phase F: Fixed Assets + Depreciation ----
+
+export type FixedAssetStatus = "active" | "disposed";
+export type DepreciationMethod = "straight_line";
+
+export interface FixedAsset {
+  id: number;
+  asset_no: string;
+  financial_year: string;
+  company_id: number;
+  asset_name: string;
+  category: string | null;
+  purchase_date: string;
+  cost: string;
+  salvage_value: string;
+  useful_life_months: number;
+  depreciation_method: DepreciationMethod;
+  status: FixedAssetStatus;
+  disposal_date: string | null;
+  disposal_amount: string | null;
+  notes: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  /** Only present on the list endpoint - see fixedAssets.ts's list query. */
+  company_name?: string;
+  company_code?: string;
+  accumulated_depreciation?: string;
+  book_value?: number;
+}
+
+export interface FixedAssetDepreciationEntry {
+  id: number;
+  fixed_asset_id: number;
+  period_end_date: string;
+  amount: string;
+  created_by: number | null;
+  created_at: string;
+}
+
+export interface FixedAssetDetail {
+  asset: FixedAsset;
+  entries: FixedAssetDepreciationEntry[];
+  accumulatedDepreciation: number;
+  bookValue: number;
+}
+
+export interface DepreciationRunResult {
+  posted: { assetId: number; assetName: string; amount: number; journalId: number }[];
+  skipped: { assetId: number; assetName: string; reason: string }[];
+}

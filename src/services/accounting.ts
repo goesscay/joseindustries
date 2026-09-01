@@ -1431,6 +1431,175 @@ export async function postAccountTransferJournalTx(
   });
 }
 
+// ---- Double-entry rollout, Phase F: Fixed Assets + Depreciation. Three
+// posting functions for the three journals a fixed asset ever generates
+// over its lifetime - acquisition (once), depreciation (repeatedly, one per
+// period run), and disposal (once, terminal). See schema.sql's comment on
+// fixed_assets for the full design. ----
+
+export interface PostFixedAssetAcquisitionJournalInput {
+  companyId: number;
+  fixedAssetId: number;
+  cost: number;
+  contraAccountId: number;
+  purchaseDate: string;
+  assetName: string;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Fixed Assets (the one shared "1200" leaf every asset's cost posts
+ * against - same convention Inventory/Accounts Receivable already use, not
+ * a dedicated leaf per asset), Cr whatever Chart of Accounts leaf the user
+ * says the money actually came from/went to (Bank, Cash, Accounts Payable,
+ * Capital...) - the same "pick any true-leaf contra account" pattern
+ * postBankCashEntryJournalTx already established.
+ */
+export async function postFixedAssetAcquisitionJournalTx(
+  conn: PoolConnection,
+  input: PostFixedAssetAcquisitionJournalInput
+): Promise<Journal> {
+  const fixedAssetChartId = await getSystemAccountByCategory(input.companyId, "Fixed Assets");
+  if (!fixedAssetChartId) throw new AccountingError("This company has no Fixed Assets account configured");
+
+  const amount = round2(input.cost);
+  const description = `Fixed Asset acquired: ${input.assetName}`;
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.purchaseDate,
+    reference: null,
+    source_type: "fixed_asset",
+    source_id: input.fixedAssetId,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: fixedAssetChartId, debit: amount, credit: 0, description },
+      { account_id: input.contraAccountId, debit: 0, credit: amount, description },
+    ],
+  });
+}
+
+export interface PostFixedAssetDepreciationJournalInput {
+  companyId: number;
+  depreciationEntryId: number;
+  amount: number;
+  periodEndDate: string;
+  assetName: string;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Depreciation (expense), Cr Accumulated Depreciation (the contra-asset
+ * sibling of Fixed Assets - see schema.sql's comment on chart_of_accounts
+ * '1210' for why a credit balance there correctly reduces Total Assets with
+ * no other code changes needed). source_id is the
+ * fixed_asset_depreciation_entries row's own id, not the asset's id - an
+ * asset generates MANY of these journals over its life (one per period
+ * run), so "the latest journal for this source" (getJournalBySource's
+ * assumption everywhere else in this app) would be meaningless here; each
+ * period's entry needs its own independently-reversible journal.
+ */
+export async function postFixedAssetDepreciationJournalTx(
+  conn: PoolConnection,
+  input: PostFixedAssetDepreciationJournalInput
+): Promise<Journal> {
+  const depreciationChartId = await getSystemAccountByCategory(input.companyId, "Depreciation");
+  const accumulatedChartId = await getSystemAccountByCategory(input.companyId, "Accumulated Depreciation");
+  if (!depreciationChartId || !accumulatedChartId) {
+    throw new AccountingError("This company has no Depreciation/Accumulated Depreciation account configured");
+  }
+
+  const amount = round2(input.amount);
+  const description = `Depreciation: ${input.assetName} (period ending ${input.periodEndDate})`;
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.periodEndDate,
+    reference: null,
+    source_type: "fixed_asset_depreciation",
+    source_id: input.depreciationEntryId,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: depreciationChartId, debit: amount, credit: 0, description },
+      { account_id: accumulatedChartId, debit: 0, credit: amount, description },
+    ],
+  });
+}
+
+export interface PostFixedAssetDisposalJournalInput {
+  companyId: number;
+  fixedAssetId: number;
+  cost: number;
+  accumulatedDepreciation: number;
+  disposalAmount: number;
+  contraAccountId: number | null;
+  disposalDate: string;
+  assetName: string;
+  createdBy: number | null;
+}
+
+/**
+ * Removes an asset from the books entirely: Cr Fixed Assets (its full
+ * original cost), Dr Accumulated Depreciation (everything accrued against
+ * it to date - zeroing out just this asset's share of that shared contra
+ * leaf), Dr the contra account for any disposal proceeds received, and a
+ * balancing Gain/Loss on Disposal line for whatever's left over so the
+ * journal still balances:
+ *   bookValue = cost - accumulatedDepreciation
+ *   gainOrLoss = disposalAmount - bookValue
+ * A positive gainOrLoss (sold above book value) credits Other Income; a
+ * negative one (sold below book value, including a full write-off at
+ * disposalAmount = 0) debits Other Expenses. Proven to balance for every
+ * sign combination - see this function's own tests/comment in
+ * fixedAssets.ts's dispose route for the worked algebra.
+ */
+export async function postFixedAssetDisposalJournalTx(
+  conn: PoolConnection,
+  input: PostFixedAssetDisposalJournalInput
+): Promise<Journal> {
+  const fixedAssetChartId = await getSystemAccountByCategory(input.companyId, "Fixed Assets");
+  const accumulatedChartId = await getSystemAccountByCategory(input.companyId, "Accumulated Depreciation");
+  if (!fixedAssetChartId || !accumulatedChartId) {
+    throw new AccountingError("This company has no Fixed Assets/Accumulated Depreciation account configured");
+  }
+
+  const cost = round2(input.cost);
+  const accumulated = round2(input.accumulatedDepreciation);
+  const disposalAmount = round2(input.disposalAmount);
+  const bookValue = round2(cost - accumulated);
+  const gainOrLoss = round2(disposalAmount - bookValue);
+  const description = `Disposal of Fixed Asset: ${input.assetName}`;
+
+  const lines: JournalLineInput[] = [{ account_id: fixedAssetChartId, debit: 0, credit: cost, description }];
+  if (accumulated > 0) {
+    lines.push({ account_id: accumulatedChartId, debit: accumulated, credit: 0, description });
+  }
+  if (disposalAmount > 0) {
+    if (!input.contraAccountId) throw new AccountingError("A receiving account is required when disposal proceeds are greater than zero");
+    lines.push({ account_id: input.contraAccountId, debit: disposalAmount, credit: 0, description });
+  }
+  if (gainOrLoss > 0) {
+    const gainChartId = await getSystemAccountByCategory(input.companyId, "Other Income");
+    if (!gainChartId) throw new AccountingError("This company has no Other Income account configured");
+    lines.push({ account_id: gainChartId, debit: 0, credit: gainOrLoss, description: `${description} (gain)` });
+  } else if (gainOrLoss < 0) {
+    const lossChartId = await getSystemAccountByCategory(input.companyId, "Other Expenses");
+    if (!lossChartId) throw new AccountingError("This company has no Other Expenses account configured");
+    lines.push({ account_id: lossChartId, debit: -gainOrLoss, credit: 0, description: `${description} (loss)` });
+  }
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.disposalDate,
+    reference: null,
+    source_type: "fixed_asset_disposal",
+    source_id: input.fixedAssetId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
 /**
  * Net balance of one account, optionally as of a given date (inclusive),
  * signed by its normal_balance so an Asset/Expense account reads positive
