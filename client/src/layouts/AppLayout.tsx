@@ -171,6 +171,7 @@ export function AppLayout() {
               label: "Accounting",
               children: [
                 { key: "/accounting/chart-of-accounts", icon: <BookOutlined />, label: "Chart of Accounts" },
+                { key: "/accounting/journals", icon: <FileTextOutlined />, label: "Journal Entries" },
               ],
             },
             {

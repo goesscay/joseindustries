@@ -22,6 +22,7 @@ import { PurchaseOrdersPage } from "./pages/PurchaseOrdersPage";
 import { PurchaseBillsPage } from "./pages/PurchaseBillsPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
+import { JournalEntriesPage } from "./pages/JournalEntriesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { GstReturnsPage } from "./pages/GstReturnsPage";
 import { StockLevelsPage, StockLedgerPage, OpeningStockPage, StockAdjustmentsPage, InventoryValuationPage } from "./pages/InventoryPage";
@@ -104,6 +105,14 @@ function App() {
             element={
               <ModuleGate module="accounting.chart_of_accounts">
                 <ChartOfAccountsPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/accounting/journals"
+            element={
+              <ModuleGate module="accounting.journals">
+                <JournalEntriesPage />
               </ModuleGate>
             }
           />

@@ -23,7 +23,14 @@ journalsRouter.get(
 
     const clauses = ["company_id = ?"];
     const params: unknown[] = [companyId];
-    if (req.query.source_type) {
+    if (req.query.source_type === "manual") {
+      // Manual journal entries (this page's own "New Journal Entry") are
+      // the only ones with a NULL source_type - every document-posted
+      // journal always sets one. "= NULL" would never match in SQL, so
+      // this needs its own clause rather than reusing the exact-match one
+      // below.
+      clauses.push("source_type IS NULL");
+    } else if (req.query.source_type) {
       clauses.push("source_type = ?");
       params.push(req.query.source_type);
     }
@@ -62,11 +69,22 @@ journalsRouter.get(
 // validation (balance, per-line shape, cross-company accounts) lives in
 // src/services/accounting.ts so it can't drift between this and any future
 // caller (e.g. receipts/vendor payments posting their own journals later).
+//
+// source_type/source_id are deliberately NEVER taken from the request body
+// here, even if a caller sends them - every document-posted journal
+// (Tax Invoice, Receipt, Purchase Bill, ...) sets its own source_type via
+// its own route calling createJournalTx directly, never through this
+// generic endpoint. If this route let a client set an arbitrary
+// source_type/source_id, a manual entry could masquerade as (or collide
+// with) a document's journal, and getJournalBySource - which every
+// document's own edit/cancel flow uses to find "the journal for this
+// document" - would silently pick up the wrong row. This endpoint only
+// ever creates true manual entries: source_type/source_id are always NULL.
 journalsRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
-    const { company_id, journal_date, reference, source_type, source_id, description, lines } = req.body ?? {};
+    const { company_id, journal_date, reference, description, lines } = req.body ?? {};
     if (!company_id || !journal_date) {
       return res.status(400).json({ message: "company_id and journal_date are required" });
     }
@@ -75,8 +93,8 @@ journalsRouter.post(
         company_id,
         journal_date,
         reference: reference ?? null,
-        source_type: source_type ?? null,
-        source_id: source_id ?? null,
+        source_type: null,
+        source_id: null,
         description: description ?? null,
         created_by: req.user!.sub,
         lines: Array.isArray(lines) ? lines : [],
@@ -93,12 +111,27 @@ journalsRouter.post(
 // There is deliberately no PUT/edit route here - a posted journal is never
 // edited in place. A mistake is corrected by reversing it (below), which
 // posts an offsetting journal and keeps the original for the audit trail.
+//
+// Only a manual entry (source_type IS NULL) can be reversed through this
+// generic endpoint - a document-posted journal (source_type set) must be
+// reversed via that document's own cancel/edit flow instead, which also
+// updates the document's own status (cancelled, etc.) in the same
+// transaction. Reversing it here would desync the two: the ledger would
+// show the journal reversed while the document itself still claimed to be
+// sent/paid/received.
 journalsRouter.post(
   "/:id/reverse",
   requireModuleAccess(MODULE, "edit"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     try {
+      const existing = await getJournalById(id);
+      if (!existing) return res.status(404).json({ message: "Journal not found" });
+      if (existing.source_type !== null) {
+        return res.status(400).json({
+          message: "This journal was posted by a document and can only be reversed by cancelling or editing that document, not from here.",
+        });
+      }
       const reversal = await reverseJournal(id, req.user!.sub);
       const lines = await getJournalLines(reversal.id);
       res.status(201).json({ journal: reversal, lines });

@@ -481,6 +481,42 @@ export interface ChartOfAccount {
   updated_at: string;
 }
 
+export type JournalStatus = "posted" | "reversed";
+
+export interface Journal {
+  id: number;
+  company_id: number;
+  journal_date: string;
+  reference: string | null;
+  source_type: string | null;
+  source_id: number | null;
+  description: string | null;
+  status: JournalStatus;
+  reverses_journal_id: number | null;
+  created_by: number | null;
+  created_at: string;
+}
+
+export interface JournalLine {
+  id: number;
+  journal_id: number;
+  account_id: number;
+  debit: string;
+  credit: string;
+  description: string | null;
+  sort_order: number;
+}
+
+/** Input shape for one line when posting a new manual journal - amounts are
+ * plain numbers here (the form's own state), unlike JournalLine's stored
+ * string decimals coming back from the API. */
+export interface JournalLineInput {
+  account_id: number;
+  debit: number;
+  credit: number;
+  description?: string | null;
+}
+
 export interface GeneralLedgerEntry {
   journal_id: number;
   journal_date: string;
