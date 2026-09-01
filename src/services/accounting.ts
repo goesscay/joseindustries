@@ -1016,6 +1016,234 @@ export async function postPurchaseBillJournalTx(conn: PoolConnection, input: Pos
 }
 
 // ----------------------------------------------------------------------------
+// Double-entry rollout, Phase D: Credit Notes (customer-side) and Debit
+// Notes (vendor-side) - each is the exact accounting REVERSE of the
+// document it corrects (postTaxInvoiceJournalTx / postPurchaseBillJournalTx
+// above), for whatever portion of that document's lines the note actually
+// covers. Neither knows anything about the "physical goods returning to
+// stock" side - that is a second, independent journal
+// (postCreditNoteStockReversalJournalTx / postDebitNoteStockReversalJournalTx
+// below), posted only for lines actually flagged to restock, exactly
+// mirroring how postSaleCogsJournalTx is already its own journal separate
+// from postTaxInvoiceJournalTx.
+// ----------------------------------------------------------------------------
+
+export interface PostCreditNoteJournalInput {
+  companyId: number;
+  creditNoteId: number;
+  creditNoteNo: string;
+  issueDate: string;
+  grandTotal: number;
+  taxTotal: number;
+  cgstTotal: number;
+  sgstTotal: number;
+  igstTotal: number;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Sales Revenue, Dr Output CGST/SGST/IGST, Cr Accounts Receivable - the
+ * exact reverse of postTaxInvoiceJournalTx, for the credited amount only
+ * (never the original invoice's full total unless the whole thing is being
+ * credited). Only the GST lines actually nonzero are included, same rule
+ * postTaxInvoiceJournalTx itself uses.
+ */
+export async function postCreditNoteJournalTx(conn: PoolConnection, input: PostCreditNoteJournalInput): Promise<Journal> {
+  const arAccountId = await getSystemAccountByCategory(input.companyId, "Accounts Receivable");
+  if (!arAccountId) {
+    throw new AccountingError("Accounts Receivable system account not found for this company");
+  }
+  const revenueAccountId = await getSystemAccountByCategory(input.companyId, "Sales");
+  if (!revenueAccountId) {
+    throw new AccountingError("Sales Revenue system account not found for this company");
+  }
+
+  const description = `Credit Note ${input.creditNoteNo}`;
+  const revenueAmount = round2(input.grandTotal - input.taxTotal);
+  const lines: JournalLineInput[] = [{ account_id: arAccountId, debit: 0, credit: input.grandTotal, description }];
+  if (revenueAmount > 0) {
+    lines.push({ account_id: revenueAccountId, debit: revenueAmount, credit: 0, description });
+  }
+
+  if (input.igstTotal > 0) {
+    const igstAccountId = await getSystemAccountByCategory(input.companyId, "Output IGST");
+    if (!igstAccountId) {
+      throw new AccountingError("Output IGST system account not found for this company");
+    }
+    lines.push({ account_id: igstAccountId, debit: input.igstTotal, credit: 0, description });
+  } else {
+    if (input.cgstTotal > 0) {
+      const cgstAccountId = await getSystemAccountByCategory(input.companyId, "Output CGST");
+      if (!cgstAccountId) {
+        throw new AccountingError("Output CGST system account not found for this company");
+      }
+      lines.push({ account_id: cgstAccountId, debit: input.cgstTotal, credit: 0, description });
+    }
+    if (input.sgstTotal > 0) {
+      const sgstAccountId = await getSystemAccountByCategory(input.companyId, "Output SGST");
+      if (!sgstAccountId) {
+        throw new AccountingError("Output SGST system account not found for this company");
+      }
+      lines.push({ account_id: sgstAccountId, debit: input.sgstTotal, credit: 0, description });
+    }
+  }
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.issueDate,
+    reference: input.creditNoteNo,
+    source_type: "credit_note",
+    source_id: input.creditNoteId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
+export interface PostCreditNoteStockReversalJournalInput {
+  companyId: number;
+  creditNoteId: number;
+  creditNoteNo: string;
+  issueDate: string;
+  /** Sum of qty * unit_cost across every 'adjustment_in' stock_transactions
+   * row this credit note actually posted (read directly from
+   * postDocumentStockMovementTx's own returned rows, never recomputed
+   * independently - same contract as postSaleCogsJournalTx's cogsAmount).
+   * Callers must only invoke this when restockAmount > 0. */
+  restockAmount: number;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Inventory, Cr Cost of Goods Sold - the reverse of postSaleCogsJournalTx,
+ * for whichever lines were actually flagged to restock (see
+ * credit_note_items.restock) at whatever unit_cost the ORIGINAL Tax
+ * Invoice's own sale_issue stock_transactions recorded for that item - never
+ * today's average - so this exactly undoes the COGS that specific unit
+ * contributed, not an approximation of it (see
+ * src/routes/creditNotes.ts's resolveOriginalUnitCosts).
+ */
+export async function postCreditNoteStockReversalJournalTx(
+  conn: PoolConnection,
+  input: PostCreditNoteStockReversalJournalInput
+): Promise<Journal> {
+  const cogsAccountId = await getSystemAccountByCategory(input.companyId, "Cost of Goods Sold");
+  if (!cogsAccountId) {
+    throw new AccountingError("Cost of Goods Sold system account not found for this company");
+  }
+  const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
+  if (!inventoryAccountId) {
+    throw new AccountingError("Inventory system account not found for this company");
+  }
+
+  const description = `Stock return for Credit Note ${input.creditNoteNo}`;
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.issueDate,
+    reference: input.creditNoteNo,
+    source_type: "credit_note_stock",
+    source_id: input.creditNoteId,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: inventoryAccountId, debit: input.restockAmount, credit: 0, description },
+      { account_id: cogsAccountId, debit: 0, credit: input.restockAmount, description },
+    ],
+  });
+}
+
+export interface PostDebitNoteJournalInput {
+  companyId: number;
+  debitNoteId: number;
+  debitNoteNo: string;
+  issueDate: string;
+  /** Same per-line classification shape postPurchaseBillJournalTx takes -
+   * whichever account category the original Purchase Bill line posted to
+   * (Inventory vs Purchases) is exactly what this must credit back, so the
+   * reversal lands on the same account the original charge did. */
+  lines: PurchaseBillJournalLine[];
+  createdBy: number | null;
+}
+
+/**
+ * Dr Accounts Payable, Cr Inventory/Purchases (split per line exactly like
+ * postPurchaseBillJournalTx's own Dr side), Cr Input GST - the exact reverse
+ * of postPurchaseBillJournalTx, for the debited amount only.
+ */
+export async function postDebitNoteJournalTx(conn: PoolConnection, input: PostDebitNoteJournalInput): Promise<Journal> {
+  let inventorySubtotal = 0;
+  let nonInventorySubtotal = 0;
+  let totalTax = 0;
+  for (const line of input.lines) {
+    if (line.isInventoryTracked) {
+      inventorySubtotal += line.taxableValue;
+    } else {
+      nonInventorySubtotal += line.taxableValue;
+    }
+    totalTax += line.taxAmount;
+  }
+  inventorySubtotal = round2(inventorySubtotal);
+  nonInventorySubtotal = round2(nonInventorySubtotal);
+  totalTax = round2(totalTax);
+
+  const apAccountId = await getSystemAccountByCategory(input.companyId, "Accounts Payable");
+  if (!apAccountId) {
+    throw new AccountingError("Accounts Payable system account not found for this company");
+  }
+
+  const description = `Debit Note ${input.debitNoteNo}`;
+  const total = round2(inventorySubtotal + nonInventorySubtotal + totalTax);
+  const lines: JournalLineInput[] = [{ account_id: apAccountId, debit: total, credit: 0, description }];
+
+  if (inventorySubtotal > 0) {
+    const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");
+    if (!inventoryAccountId) {
+      throw new AccountingError("Inventory system account not found for this company");
+    }
+    lines.push({ account_id: inventoryAccountId, debit: 0, credit: inventorySubtotal, description });
+  }
+
+  if (nonInventorySubtotal > 0) {
+    const purchasesAccountId = await getSystemAccountByCategory(input.companyId, "Purchases");
+    if (!purchasesAccountId) {
+      throw new AccountingError("Purchases system account not found for this company");
+    }
+    lines.push({ account_id: purchasesAccountId, debit: 0, credit: nonInventorySubtotal, description });
+  }
+
+  if (totalTax > 0) {
+    const inputGstAccountId = await getSystemAccountByCategory(input.companyId, "Input GST");
+    if (!inputGstAccountId) {
+      throw new AccountingError("Input GST system account not found for this company");
+    }
+    lines.push({ account_id: inputGstAccountId, debit: 0, credit: totalTax, description });
+  }
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.issueDate,
+    reference: input.debitNoteNo,
+    source_type: "debit_note",
+    source_id: input.debitNoteId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
+// Note: a Debit Note's stock-tracked lines deliberately get NO second
+// "stock reversal" journal the way a Credit Note's do. postPurchaseBillJournalTx
+// never split "record the sale" from "record its cost" the way
+// postTaxInvoiceJournalTx/postSaleCogsJournalTx do - it debits
+// Inventory/Purchases directly, in one step, at cost. postDebitNoteJournalTx
+// above already reverses that exact entry (Cr Inventory/Purchases), so a
+// second Dr Cost of Goods Sold / Cr Inventory journal here would double-count
+// the same inventory decrease. The stock QUANTITY ledger (stock_transactions)
+// still needs its own 'adjustment_out' row so on-hand quantity/valuation
+// stay correct - see src/routes/debitNotes.ts - but that is a quantity
+// movement, not a second dollar-value journal.
+
+// ----------------------------------------------------------------------------
 // Phase B (Bank & Cash): the three postings below are what replace the old
 // `journal_entries` table's create/transfer/opening-balance flows. All three
 // exist for exactly the same reason postReceiptJournalTx/

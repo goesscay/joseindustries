@@ -20,6 +20,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   { key: "sales.proforma_invoices", label: "Proforma Invoices", group: "Sales" },
   { key: "sales.delivery_challans", label: "Delivery Challans", group: "Sales" },
   { key: "sales.tax_invoices", label: "Tax Invoices", group: "Sales" },
+  { key: "sales.credit_notes", label: "Credit Notes", group: "Sales" },
   { key: "sales.receipts", label: "Receipts", group: "Sales" },
 
   { key: "expenses.expenses", label: "Expenses", group: "Expenses" },
@@ -28,6 +29,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
 
   { key: "purchases.orders", label: "Purchase Orders", group: "Purchases" },
   { key: "purchases.bills", label: "Purchase Bills", group: "Purchases" },
+  { key: "purchases.debit_notes", label: "Debit Notes", group: "Purchases" },
 
   { key: "banking.accounts", label: "Bank & Cash", group: "Banking" },
 

@@ -1043,3 +1043,134 @@ ALTER TABLE stock_transactions ADD INDEX IF NOT EXISTS idx_stock_txn_opening (co
 -- no-op), so no guard is needed.
 -- ============================================================================
 ALTER TABLE vendor_payments MODIFY COLUMN vendor_id INT UNSIGNED NULL;
+
+-- ============================================================================
+-- Double-entry rollout, Phase D: Credit Notes (customer-side - a correction
+-- against an existing Tax Invoice: a return, a price adjustment, a billing
+-- error) and Debit Notes (vendor-side mirror - a correction against an
+-- existing Purchase Bill). Each gets its OWN dedicated pair of tables,
+-- deliberately NOT another doc_type on the shared documents/document_items
+-- table Quotation/Proforma/Delivery Challan/Tax Invoice already use - unlike
+-- those four, a Credit Note is never itself converted into anything else,
+-- carries none of documents' Tally-style dispatch/consignee/transport
+-- fields, and its create/cancel logic reverses (rather than mirrors) a Tax
+-- Invoice's own postings, so folding it into that already-large shared
+-- factory (createSalesDocumentRouter) would mean threading a second,
+-- opposite-signed accounting path through code four other document types
+-- also depend on - real risk to already-working Tax Invoice behavior for a
+-- document type that doesn't need any of what that table provides. Purchase
+-- Bills already made the identical choice for the vendor side (their own
+-- tables, not documents/document_items) for the same reasons, so Debit
+-- Notes mirroring THAT shape (rather than documents') keeps sales-side and
+-- purchase-side symmetric with each other, exactly like the existing
+-- Tax-Invoice/Purchase-Bill pair already is.
+--
+-- Deliberately create-and-cancel only (no PUT/edit route) - a correction
+-- document being itself silently corrected in place is exactly the kind of
+-- fragile audit trail this whole rollout has been closing everywhere else;
+-- a mistake here is fixed by cancelling (which reverses its journal/stock,
+-- never reposts) and issuing a fresh, correct one, matching how a reversal
+-- is the only correction mechanism a journal itself ever gets.
+--
+-- Every line is seeded from - and can only reduce quantity against - the
+-- source Tax Invoice/Purchase Bill's own lines (never a new item, never a
+-- higher quantity, never a different rate) so the credited/debited amount
+-- always stays traceable to what was actually charged on the original
+-- document, which is what GST law expects of a credit/debit note. Each
+-- stock-tracked line carries its own `restock` flag (default true) so a
+-- pure price adjustment or write-off - crediting/debiting an amount without
+-- expecting the goods to physically move - can skip the stock effect for
+-- that line while still adjusting revenue/tax/AR (or cost/tax/AP).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS credit_notes (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  credit_note_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  customer_id INT UNSIGNED NOT NULL,
+  -- Must reference a documents row with doc_type = 'tax_invoice' - enforced
+  -- at the application layer (documents is a polymorphic table; a DB-level
+  -- FK here can't also constrain doc_type).
+  tax_invoice_id INT UNSIGNED NOT NULL,
+  status ENUM('draft', 'cancelled') NOT NULL DEFAULT 'draft',
+  issue_date DATE NOT NULL,
+  reason VARCHAR(255) NULL,
+  notes TEXT NULL,
+  subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  cgst_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  sgst_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  igst_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  grand_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_credit_note_no (credit_note_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (customer_id) REFERENCES customers(id),
+  FOREIGN KEY (tax_invoice_id) REFERENCES documents(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS credit_note_items (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  credit_note_id INT UNSIGNED NOT NULL,
+  item_id INT UNSIGNED NULL,
+  description VARCHAR(255) NOT NULL,
+  hsn_code VARCHAR(20) NULL,
+  qty DECIMAL(10, 2) NOT NULL DEFAULT 1,
+  unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+  rate DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  taxable_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  line_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  restock BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+  FOREIGN KEY (credit_note_id) REFERENCES credit_notes(id) ON DELETE CASCADE,
+  FOREIGN KEY (item_id) REFERENCES items(id)
+);
+
+CREATE TABLE IF NOT EXISTS debit_notes (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  debit_note_no VARCHAR(40) NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  vendor_id INT UNSIGNED NOT NULL,
+  purchase_bill_id INT UNSIGNED NOT NULL,
+  status ENUM('draft', 'cancelled') NOT NULL DEFAULT 'draft',
+  issue_date DATE NOT NULL,
+  reason VARCHAR(255) NULL,
+  notes TEXT NULL,
+  subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_debit_note_no (debit_note_no),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (purchase_bill_id) REFERENCES purchase_bills(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS debit_note_items (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  debit_note_id INT UNSIGNED NOT NULL,
+  item_id INT UNSIGNED NULL,
+  description VARCHAR(255) NOT NULL,
+  hsn_code VARCHAR(20) NULL,
+  qty DECIMAL(10, 2) NOT NULL DEFAULT 1,
+  unit VARCHAR(50) NOT NULL DEFAULT 'pcs',
+  rate DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  taxable_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  line_total DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  restock BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+  FOREIGN KEY (debit_note_id) REFERENCES debit_notes(id) ON DELETE CASCADE,
+  FOREIGN KEY (item_id) REFERENCES items(id)
+);

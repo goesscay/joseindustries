@@ -86,7 +86,19 @@ export interface Gstr1Result {
 }
 
 const UNSUPPORTED_GSTR1_SECTIONS = [
-  "Credit/Debit Notes (feature does not exist in this application)",
+  // Double-entry rollout, Phase D: Credit Notes/Debit Notes now exist and
+  // post real journals (src/routes/creditNotes.ts, debitNotes.ts) - so the
+  // AGGREGATE Output/Input GST liability this module's own getGstSummary
+  // reuse already reflects them correctly, automatically, with no code
+  // change needed here (getGstSummary is ledger-derived, and a credit/debit
+  // note's journal reverses Output/Input GST through the exact same system
+  // accounts a Tax Invoice/Purchase Bill posts to). What's still missing is
+  // only the GSTR-1 CDNR (Credit/Debit Note Registered) section's own
+  // INVOICE-LEVEL detail table (note number, original invoice reference,
+  // per-line HSN) - this module is document-derived for that kind of detail
+  // (see the file's own top comment), and no credit_notes/debit_notes rows
+  // are read into a Gstr1-shaped table here yet.
+  "Credit/Debit Notes (aggregate GST liability already reflects them via the ledger; the GSTR-1 CDNR invoice-level detail table is not yet built)",
   "Exports/SEZ supplies (no export or SEZ classification is stored)",
   "Exempt/Nil-rated/Non-GST supplies (only a generic 0% tax rate exists, not a distinct classification)",
   "B2C state-wise breakup (customers have no reliable state code; shown as one combined total instead)",

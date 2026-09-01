@@ -367,6 +367,106 @@ export interface PurchaseBillItem {
   sort_order?: number;
 }
 
+// ---- Double-entry rollout, Phase D: Credit Notes / Debit Notes - their own
+// tables, not another documents doc_type - see schema.sql's comment on
+// credit_notes for why. ----
+
+export type CreditNoteStatus = "draft" | "cancelled";
+
+export interface CreditNote {
+  id: number;
+  credit_note_no: string;
+  financial_year: string;
+  company_id: number;
+  company_name?: string;
+  company_code?: string;
+  customer_id: number;
+  customer_name?: string;
+  tax_invoice_id: number;
+  /** Only present on the list/detail endpoints. */
+  source_invoice_no?: string;
+  status: CreditNoteStatus;
+  issue_date: string;
+  reason: string | null;
+  notes: string | null;
+  subtotal: string;
+  cgst_total: string;
+  sgst_total: string;
+  igst_total: string;
+  tax_total: string;
+  grand_total: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreditNoteItem {
+  id?: number;
+  credit_note_id?: number;
+  /** Only meaningful when creating a credit note - the source Tax Invoice's
+   * own document_items.id this line is crediting. Not present on an
+   * already-saved item read back from the server. */
+  document_item_id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  taxable_amount: number;
+  tax_amount: number;
+  line_total: number;
+  restock: boolean | number;
+  sort_order?: number;
+}
+
+export type DebitNoteStatus = "draft" | "cancelled";
+
+export interface DebitNote {
+  id: number;
+  debit_note_no: string;
+  financial_year: string;
+  company_id: number;
+  company_name?: string;
+  company_code?: string;
+  vendor_id: number;
+  vendor_name?: string;
+  purchase_bill_id: number;
+  /** Only present on the list/detail endpoints. */
+  source_bill_no?: string;
+  status: DebitNoteStatus;
+  issue_date: string;
+  reason: string | null;
+  notes: string | null;
+  subtotal: string;
+  tax_amount: string;
+  total_amount: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DebitNoteItem {
+  id?: number;
+  debit_note_id?: number;
+  /** Only meaningful when creating a debit note - the source Purchase
+   * Bill's own purchase_bill_items.id this line is debiting. */
+  purchase_bill_item_id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  taxable_amount: number;
+  tax_amount: number;
+  line_total: number;
+  restock: boolean | number;
+  sort_order?: number;
+}
+
 // ---- Phase 7B: Purchase Orders ----
 
 export type PurchaseOrderStatus = "draft" | "confirmed" | "cancelled";

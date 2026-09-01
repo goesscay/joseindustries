@@ -69,11 +69,16 @@ export interface StockableLine {
   qty: number;
   unit: string;
   /** Phase 12C: per-unit cost, GST-EXCLUSIVE, for an 'in' (purchase_receipt)
-   * movement only - per the approved model, unit_cost = the bill line's own
+   * movement - per the approved model, unit_cost = the bill line's own
    * `rate` (already pre-tax; GST stays in Input GST, never inventory cost).
-   * Ignored for 'out' movements, whose cost is always computed internally
-   * from the current weighted average at post time (see resolveSaleCost) -
-   * a caller can never set a sale's cost directly. `undefined`/`null` here
+   * For a plain Tax Invoice 'out' movement this is left unset and the cost
+   * is always computed internally from the current weighted average at post
+   * time instead (see resolveSaleCost) - a sale can never have its cost set
+   * directly. Phase D's Debit Note is the one 'out' case that DOES supply
+   * this explicitly: the exact per-unit cost that was recorded when those
+   * units came in (the original Purchase Bill line's own rate), so the
+   * stock/COGS effect this reverses is proportionally exact rather than
+   * priced at whatever today's average happens to be. `undefined`/`null`
    * (rather than a number, including 0) means "no cost known" - a real
    * receipt at zero cost (e.g. free goods) is qty:X, unitCost:0, which is
    * NOT the same as an unknown cost; see getStockValuation's costedQty. */
@@ -445,10 +450,11 @@ export async function getTrackedItemIds(executor: Executor, itemIds: number[]): 
 
 export interface PostDocumentStockMovementInput {
   companyId: number;
-  sourceType: "purchase_bill" | "tax_invoice";
+  sourceType: "purchase_bill" | "tax_invoice" | "credit_note" | "debit_note";
   sourceId: number;
   txnDate: string;
-  /** 'in' for a Purchase Bill's receipt, 'out' for a Tax Invoice's issue. */
+  /** 'in' for a Purchase Bill's receipt or a Credit Note's return-to-stock,
+   * 'out' for a Tax Invoice's issue or a Debit Note's return-to-vendor. */
   direction: "in" | "out";
   lines: StockableLine[];
   createdBy: number | null;
@@ -456,12 +462,24 @@ export interface PostDocumentStockMovementInput {
    * movement - never defaults to true. Ignored for 'in' movements (adding
    * stock can never go negative). */
   confirmNegativeStock?: boolean;
+  /** Overrides the txn_type this movement posts as - defaults to
+   * 'purchase_receipt'/'sale_issue' by direction (the original Phase 12D/E
+   * behavior, unchanged for Purchase Bill/Tax Invoice callers). Phase D's
+   * Credit/Debit Notes pass 'adjustment_in'/'adjustment_out' instead - a
+   * correction is not itself a new purchase or sale, and this schema
+   * deliberately has no dedicated "return" txn_type (see reversalTypeFor's
+   * own comment on why reversals/corrections reuse the adjustment types
+   * rather than growing the txn_type enum further).
+   */
+  txnType?: StockTxnType;
 }
 
 /**
  * Posts one stock transaction per stock-eligible line of a Purchase Bill
- * (direction 'in', txn_type 'purchase_receipt') or Tax Invoice (direction
- * 'out', txn_type 'sale_issue'). A line is stock-eligible only when ALL of:
+ * (direction 'in', txn_type 'purchase_receipt'), Tax Invoice (direction
+ * 'out', txn_type 'sale_issue'), or a Phase D Credit/Debit Note (direction
+ * 'in'/'out' respectively, txn_type 'adjustment_in'/'adjustment_out' via the
+ * `txnType` override). A line is stock-eligible only when ALL of:
  *   - item_id is not null (a free-text line can never move stock - there is
  *     nothing to track it against)
  *   - the referenced item has track_inventory = true
@@ -530,17 +548,21 @@ export async function postDocumentStockMovementTx(
 
   const posted: StockTransaction[] = [];
   const costFallbacks: StockPostResult["costFallbacks"] = [];
-  const txnType: StockTxnType = input.direction === "in" ? "purchase_receipt" : "sale_issue";
+  const txnType: StockTxnType = input.txnType ?? (input.direction === "in" ? "purchase_receipt" : "sale_issue");
   for (const { line, item } of eligible) {
     // Phase 12C: 'in' carries the caller-supplied cost through as-is (the
     // Purchase Bill line's own rate, per the approved model - see
-    // StockableLine.unitCost). 'out' NEVER accepts a caller-supplied cost -
-    // it is always resolved here, immediately before insertion, against the
-    // balance as it stands right now (including any earlier line of this
-    // same document already posted in this same loop, since resolveSaleCost
-    // reads through the same `conn`).
-    let unitCost: number | null | undefined = input.direction === "in" ? line.unitCost : undefined;
-    if (input.direction === "out") {
+    // StockableLine.unitCost). A plain Tax Invoice 'out' never supplies a
+    // cost, so it falls through to being resolved here from the current
+    // weighted average, immediately before insertion (against the balance
+    // as it stands right now, including any earlier line of this same
+    // document already posted in this same loop, since resolveSaleCost
+    // reads through the same `conn`). Phase D's Debit Note is the one 'out'
+    // caller that DOES supply a cost (the original Purchase Bill line's own
+    // rate) - when present, it's used as-is, exactly like an 'in' movement,
+    // and resolveSaleCost is never even called.
+    let unitCost: number | null | undefined = line.unitCost;
+    if (input.direction === "out" && unitCost === undefined) {
       const resolved = await resolveSaleCost(conn, input.companyId, item.id);
       unitCost = resolved.unitCost;
       if (resolved.isFallback) {

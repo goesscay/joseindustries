@@ -334,6 +334,95 @@ export interface PurchaseBillItem {
   sort_order?: number;
 }
 
+// ---- Double-entry rollout, Phase D: Credit Notes / Debit Notes - their own
+// tables, not another documents doc_type - see schema.sql's comment on
+// credit_notes for why. ----
+
+export type CreditNoteStatus = "draft" | "cancelled";
+
+export interface CreditNote {
+  id: number;
+  credit_note_no: string;
+  financial_year: string;
+  company_id: number;
+  customer_id: number;
+  tax_invoice_id: number;
+  status: CreditNoteStatus;
+  issue_date: string;
+  reason: string | null;
+  notes: string | null;
+  subtotal: string;
+  cgst_total: string;
+  sgst_total: string;
+  igst_total: string;
+  tax_total: string;
+  grand_total: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreditNoteItem {
+  id?: number;
+  credit_note_id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  taxable_amount: number;
+  tax_amount: number;
+  line_total: number;
+  /** Whether this line's quantity is returned to stock (true) or is a pure
+   * price/billing adjustment with no goods movement (false) - only
+   * meaningful for a stock-tracked item; ignored otherwise. */
+  restock: boolean | number;
+  sort_order?: number;
+}
+
+export type DebitNoteStatus = "draft" | "cancelled";
+
+export interface DebitNote {
+  id: number;
+  debit_note_no: string;
+  financial_year: string;
+  company_id: number;
+  vendor_id: number;
+  purchase_bill_id: number;
+  status: DebitNoteStatus;
+  issue_date: string;
+  reason: string | null;
+  notes: string | null;
+  subtotal: string;
+  tax_amount: string;
+  total_amount: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DebitNoteItem {
+  id?: number;
+  debit_note_id?: number;
+  item_id: number | null;
+  description: string;
+  hsn_code: string | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  tax_rate: number;
+  taxable_amount: number;
+  tax_amount: number;
+  line_total: number;
+  /** Whether this line's quantity is removed from stock (true, goods
+   * physically going back to the vendor) or is a pure price/billing
+   * adjustment with no goods movement (false). */
+  restock: boolean | number;
+  sort_order?: number;
+}
+
 // ---- Phase 7B: Purchase Orders - a commitment/order document with NO
 // accounting relationship (see schema.sql's comment on purchase_orders).
 // Structurally mirrors PurchaseBill/PurchaseBillItem exactly. ----

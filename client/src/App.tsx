@@ -20,6 +20,8 @@ import { ExpensesPage } from "./pages/ExpensesPage";
 import { VendorPaymentsPage } from "./pages/VendorPaymentsPage";
 import { PurchaseOrdersPage } from "./pages/PurchaseOrdersPage";
 import { PurchaseBillsPage } from "./pages/PurchaseBillsPage";
+import { CreditNotesPage } from "./pages/CreditNotesPage";
+import { DebitNotesPage } from "./pages/DebitNotesPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { JournalEntriesPage } from "./pages/JournalEntriesPage";
@@ -57,6 +59,14 @@ function App() {
             }
           />
           <Route path="/tax-invoices" element={<ModuleGate module="sales.tax_invoices"><TaxInvoicesPage /></ModuleGate>} />
+          <Route
+            path="/sales/credit-notes"
+            element={
+              <ModuleGate module="sales.credit_notes">
+                <CreditNotesPage />
+              </ModuleGate>
+            }
+          />
           <Route path="/receipts" element={<ModuleGate module="sales.receipts"><ReceiptsPage /></ModuleGate>} />
           <Route path="/customers" element={<ModuleGate module="contacts.customers"><CustomersPage /></ModuleGate>} />
           <Route path="/items" element={<ModuleGate module="items.items"><ItemsPage /></ModuleGate>} />
@@ -88,6 +98,14 @@ function App() {
             element={
               <ModuleGate module="purchases.bills">
                 <PurchaseBillsPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/purchases/debit-notes"
+            element={
+              <ModuleGate module="purchases.debit_notes">
+                <DebitNotesPage />
               </ModuleGate>
             }
           />

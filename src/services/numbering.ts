@@ -5,7 +5,14 @@ import { DocType } from "../types";
 // Accounts-module series (expenses/vendor_payments) live in their own tables,
 // not the `documents` table, so they're kept out of the ENUM-bound DocType
 // and just widen the numbering series here.
-export type SeriesType = DocType | "expense" | "vendor_payment" | "purchase_bill" | "purchase_order";
+export type SeriesType =
+  | DocType
+  | "expense"
+  | "vendor_payment"
+  | "purchase_bill"
+  | "purchase_order"
+  | "credit_note"
+  | "debit_note";
 
 const PREFIXES: Record<SeriesType, string> = {
   quotation: "QTN",
@@ -17,6 +24,8 @@ const PREFIXES: Record<SeriesType, string> = {
   vendor_payment: "PMT",
   purchase_bill: "PB",
   purchase_order: "PO",
+  credit_note: "CN",
+  debit_note: "DN",
 };
 
 /**

@@ -54,7 +54,18 @@ export async function getPartyLedgerReport(
       `SELECT COALESCE(SUM(amount), 0) as total FROM receipts WHERE customer_id = ? AND received_date < ?`,
       [partyId, from]
     );
-    const openingBalance = Number(openingDebit[0].total) - Number(openingCredit[0].total);
+    // Phase D: a (non-cancelled) Credit Note reduces what a customer owes
+    // exactly like a Receipt does - both are credits against the invoices'
+    // debits - so the opening balance and the statement below must include
+    // credit_notes or a customer's Party Ledger balance would silently
+    // overstate what they actually still owe once any credit note exists.
+    const [openingCreditNotes] = await pool.query<any[]>(
+      `SELECT COALESCE(SUM(grand_total), 0) as total FROM credit_notes
+       WHERE customer_id = ? AND status != 'cancelled' AND issue_date < ?`,
+      [partyId, from]
+    );
+    const openingBalance =
+      Number(openingDebit[0].total) - Number(openingCredit[0].total) - Number(openingCreditNotes[0].total);
 
     const [invoices] = await pool.query<any[]>(
       `SELECT id, doc_number, issue_date as entry_date, grand_total as amount, created_at
@@ -65,6 +76,11 @@ export async function getPartyLedgerReport(
     const [receipts] = await pool.query<any[]>(
       `SELECT id, receipt_no as doc_number, received_date as entry_date, amount, created_at
        FROM receipts WHERE customer_id = ? AND received_date BETWEEN ? AND ?`,
+      [partyId, from, to]
+    );
+    const [creditNotes] = await pool.query<any[]>(
+      `SELECT id, credit_note_no as doc_number, issue_date as entry_date, grand_total as amount, created_at
+       FROM credit_notes WHERE customer_id = ? AND status != 'cancelled' AND issue_date BETWEEN ? AND ?`,
       [partyId, from, to]
     );
 
@@ -84,6 +100,14 @@ export async function getPartyLedgerReport(
         description: "Receipt",
         debit: 0,
         credit: Number(r.amount),
+      })),
+      ...creditNotes.map((cn) => ({
+        entry_date: cn.entry_date,
+        created_at: cn.created_at,
+        doc_number: cn.doc_number,
+        description: "Credit Note",
+        debit: 0,
+        credit: Number(cn.amount),
       })),
     ];
     combined.sort((a, b) => {
@@ -112,6 +136,17 @@ export async function getPartyLedgerReport(
     `SELECT COALESCE(SUM(amount), 0) as total FROM vendor_payments WHERE vendor_id = ? AND paid_date < ?`,
     [partyId, from]
   );
+  // Note: Debit Notes are deliberately NOT included here. A Debit Note is
+  // always tied to a purchase_bill_id, but purchase_bills are themselves
+  // never part of this vendor ledger at all (only expenses/vendor_payments
+  // are, a pre-existing gap that predates Phase D - confirmed nothing here
+  // or in reports.ts's Outstanding Payable ever reads purchase_bills).
+  // Adding a Debit Note's credit without the matching Purchase Bill's own
+  // debit would make this ledger MORE wrong, not less - it would show a
+  // credit with nothing behind it. Fixing that properly means adding
+  // Purchase Bills to this ledger in their own right, which is a separate,
+  // bigger, pre-existing gap - flagged as its own follow-up rather than
+  // patched over here.
   const openingBalance = Number(openingDebit[0].total) - Number(openingCredit[0].total);
 
   const [expenses] = await pool.query<any[]>(
