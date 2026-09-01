@@ -21,7 +21,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, SwapOutlined, BookOutlined 
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Account, AccountType, Company, JournalDirection, LedgerEntry } from "../types";
+import { Account, AccountType, ChartOfAccount, Company, JournalDirection, LedgerEntry } from "../types";
 
 function formatMoney(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -30,8 +30,16 @@ function formatMoney(n: number): string {
 const SOURCE_LABELS: Record<LedgerEntry["source_type"], string> = {
   receipt: "Receipt",
   vendor_payment: "Vendor Payment",
-  journal_entry: "Journal Entry",
+  bank_cash_entry: "Journal Entry",
+  account_transfer: "Transfer",
+  account_opening_balance: "Opening Balance",
 };
+
+// An entry can only be reversed from this ledger view if it's one Phase B
+// posts itself (bank_cash_entry/account_transfer) - a Receipt/Vendor
+// Payment is reversed via its own module, and an opening balance is
+// corrected by editing the account itself, not deleted from the ledger row.
+const DELETABLE_SOURCE_TYPES: LedgerEntry["source_type"][] = ["bank_cash_entry", "account_transfer"];
 
 export function AccountsPage() {
   const { user, can } = useAuth();
@@ -57,6 +65,7 @@ export function AccountsPage() {
   const [entryModalOpen, setEntryModalOpen] = useState(false);
   const [entrySaving, setEntrySaving] = useState(false);
   const [entryForm] = Form.useForm();
+  const [chartAccounts, setChartAccounts] = useState<ChartOfAccount[]>([]);
 
   const canCreate = can("banking.accounts", "create");
   const canEdit = can("banking.accounts", "edit");
@@ -179,7 +188,20 @@ export function AccountsPage() {
   function openLedger(record: Account) {
     setLedgerAccount(record);
     loadLedger(record.id);
+    api
+      .get<{ data: ChartOfAccount[] }>(`/chart-of-accounts?company_id=${record.company_id}`)
+      .then((res) => setChartAccounts(res.data))
+      .catch(() => {});
   }
+
+  // Same "true leaf" filter as the Journal Entries page (Phase A) - a
+  // contra account can be any postable account except a summary/header
+  // node (1000 Assets, 1100 Current Assets, ...), identified as "any
+  // account that is itself someone else's parent_id".
+  const parentIds = new Set(chartAccounts.filter((a) => a.parent_id).map((a) => a.parent_id as number));
+  const contraAccountOptions = chartAccounts
+    .filter((a) => a.is_active && !parentIds.has(a.id))
+    .map((a) => ({ value: a.id, label: `${a.account_code} - ${a.name}` }));
 
   function openAddEntry() {
     entryForm.resetFields();
@@ -192,8 +214,9 @@ export function AccountsPage() {
     const values = await entryForm.validateFields();
     setEntrySaving(true);
     try {
-      await api.post("/journal-entries", {
+      await api.post("/bank-cash-entries", {
         account_id: ledgerAccount.id,
+        contra_account_id: values.contra_account_id,
         entry_date: values.entry_date.format("YYYY-MM-DD"),
         direction: values.direction,
         amount: values.amount,
@@ -212,9 +235,10 @@ export function AccountsPage() {
   }
 
   async function handleDeleteEntry(entry: LedgerEntry) {
-    if (entry.source_type !== "journal_entry" || !ledgerAccount) return;
+    if (!ledgerAccount || !DELETABLE_SOURCE_TYPES.includes(entry.source_type)) return;
+    const path = entry.source_type === "account_transfer" ? "account-transfers" : "bank-cash-entries";
     try {
-      await api.delete(`/journal-entries/${entry.source_id}`);
+      await api.delete(`/${path}/${entry.source_id}`);
       message.success("Entry deleted");
       loadLedger(ledgerAccount.id);
       load();
@@ -309,7 +333,7 @@ export function AccountsPage() {
       key: "actions",
       width: 40,
       render: (_, record) =>
-        record.source_type === "journal_entry" && canDelete ? (
+        DELETABLE_SOURCE_TYPES.includes(record.source_type) && canDelete ? (
           <Popconfirm title="Delete this entry?" onConfirm={() => handleDeleteEntry(record)}>
             <Button size="small" danger type="text" icon={<DeleteOutlined />} />
           </Popconfirm>
@@ -442,6 +466,18 @@ export function AccountsPage() {
         <Form form={entryForm} layout="vertical" size="middle">
           <Form.Item name="direction" label="Direction" rules={[{ required: true }]}>
             <Radio.Group options={[{ label: "Money In", value: "in" as JournalDirection }, { label: "Money Out", value: "out" as JournalDirection }]} />
+          </Form.Item>
+          <Form.Item
+            name="contra_account_id"
+            label="Account (the other side of this entry)"
+            rules={[{ required: true, message: "Select which account this money moved against" }]}
+          >
+            <Select
+              showSearch
+              placeholder="e.g. Bank Charges, Interest Income, Capital"
+              options={contraAccountOptions}
+              filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="particulars" label="Particulars" rules={[{ required: true, message: "Particulars is required" }]}>
             <Input placeholder="e.g. Bank charges, Owner's capital, Petty cash withdrawal" />

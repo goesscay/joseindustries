@@ -291,10 +291,21 @@ CREATE TABLE IF NOT EXISTS accounts (
   FOREIGN KEY (company_id) REFERENCES companies(id)
 );
 
--- Manual entries for anything that isn't a Receipt or Vendor Payment -
--- opening balances, bank charges/interest, owner's capital, petty cash
--- drawdowns. A transfer between two accounts is recorded as a linked pair
--- (same transfer_group) so it can be shown/deleted together.
+-- RETIRED as of the double-entry rollout's Phase B: plain Bank & Cash
+-- entries, transfers, and opening balances are now real balanced postings
+-- in journals/journal_lines (see src/services/accounting.ts's
+-- postBankCashEntryJournalTx/postAccountTransferJournalTx/
+-- postAccountOpeningBalanceJournalTx and src/routes/bankCashEntries.ts,
+-- which replaced src/routes/journalEntries.ts's journalEntriesRouter/
+-- accountTransfersRouter). Nothing in the app reads or writes this table
+-- any more. It is left in place, never dropped (this schema never drops
+-- anything - see the file's own conventions), purely because a production
+-- deploy could in principle already have historical rows in it; verified
+-- against the live production database at the time Phase B shipped that it
+-- in fact had none (0 rows, every account's opening_balance was 0), so no
+-- backfill into journals/journal_lines was written - if this table is ever
+-- found to hold real rows after all, they need a one-time migration into
+-- the new tables before this comment (and the table) can be removed.
 CREATE TABLE IF NOT EXISTS journal_entries (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   account_id INT UNSIGNED NOT NULL,

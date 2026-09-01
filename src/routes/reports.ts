@@ -44,11 +44,22 @@ reportsRouter.get(
        WHERE p.company_id = ? AND p.paid_date BETWEEN ? AND ?`,
       [companyId, from, to]
     );
+    // Phase B: plain Bank & Cash entries and transfers are now journals
+    // posted against each account's linked Chart of Accounts node, not rows
+    // in the retired journal_entries table - joining accounts on
+    // a.chart_account_id = jl.account_id picks up exactly the postings that
+    // table used to hold. Opening-balance journals are deliberately
+    // excluded (journal_entries never held those either - they were a
+    // separate accounts.opening_balance column, invisible to the Day Book).
     const [journalRows] = await pool.query<any[]>(
-      `SELECT je.id, je.entry_date, je.direction, je.amount, je.particulars, je.created_at, a.name as account_name
-       FROM journal_entries je
-       JOIN accounts a ON a.id = je.account_id
-       WHERE a.company_id = ? AND je.entry_date BETWEEN ? AND ?`,
+      `SELECT j.id, j.journal_date as entry_date, j.description as particulars, j.created_at,
+              a.name as account_name, jl.debit, jl.credit
+       FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
+       JOIN accounts a ON a.chart_account_id = jl.account_id
+       WHERE a.company_id = ? AND j.journal_date BETWEEN ? AND ?
+         AND j.source_type IN ('bank_cash_entry', 'account_transfer')
+         AND j.status = 'posted'`,
       [companyId, from, to]
     );
 
@@ -71,15 +82,19 @@ reportsRouter.get(
         amount: Number(p.amount),
         particulars: `Payment to ${p.party_name}${p.reference_no ? ` (${p.reference_no})` : ""}`,
       })),
-      ...journalRows.map((j) => ({
-        entry_date: j.entry_date,
-        created_at: j.created_at,
-        source_type: "journal_entry" as const,
-        account_name: j.account_name,
-        direction: j.direction as "in" | "out",
-        amount: Number(j.amount),
-        particulars: j.particulars,
-      })),
+      ...journalRows.map((j) => {
+        const debit = Number(j.debit);
+        const isIn = debit > 0;
+        return {
+          entry_date: j.entry_date,
+          created_at: j.created_at,
+          source_type: "journal_entry" as const,
+          account_name: j.account_name,
+          direction: (isIn ? "in" : "out") as "in" | "out",
+          amount: isIn ? debit : Number(j.credit),
+          particulars: j.particulars || "-",
+        };
+      }),
     ];
 
     entries.sort((a, b) => {

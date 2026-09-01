@@ -3,6 +3,7 @@ import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
+import { BALANCE_EXPR } from "./accounts";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth, requireModuleAccess("dashboard", "view"));
@@ -25,16 +26,12 @@ dashboardRouter.get(
     const monthStartStr = monthStart.toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
 
-    // Cash + Bank balance across all (or one company's) accounts.
+    // Cash + Bank balance across all (or one company's) accounts - shares
+    // accounts.ts's own BALANCE_EXPR (Phase B) rather than a second
+    // hand-rolled copy of the same formula.
     const accountCompanyClause = companyId ? "WHERE a.company_id = ?" : "";
     const [balanceRows] = await pool.query<any[]>(
-      `SELECT COALESCE(SUM(
-         a.opening_balance
-         + COALESCE((SELECT SUM(r.amount) FROM receipts r WHERE r.account_id = a.id), 0)
-         - COALESCE((SELECT SUM(vp.amount) FROM vendor_payments vp WHERE vp.account_id = a.id), 0)
-         + COALESCE((SELECT SUM(CASE WHEN je.direction = 'in' THEN je.amount ELSE -je.amount END)
-                     FROM journal_entries je WHERE je.account_id = a.id), 0)
-       ), 0) as balance
+      `SELECT COALESCE(SUM(${BALANCE_EXPR}), 0) as balance
        FROM accounts a ${accountCompanyClause}`,
       companyParam
     );

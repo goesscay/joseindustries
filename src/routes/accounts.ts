@@ -3,18 +3,39 @@ import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess, getUserAccountIds } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
-import { Account, JournalDirection, LedgerEntry } from "../types";
+import {
+  AccountingError,
+  getJournalBySource,
+  getLedger,
+  postAccountOpeningBalanceJournalTx,
+  resolveBankCashChartAccountId,
+  reverseJournalTx,
+} from "../services/accounting";
+import { Account, LedgerEntry } from "../types";
 
 export const accountsRouter = Router();
 const MODULE = "banking.accounts";
 accountsRouter.use(requireAuth);
 
-const BALANCE_EXPR = `
-  a.opening_balance
-  + COALESCE((SELECT SUM(r.amount) FROM receipts r WHERE r.account_id = a.id), 0)
-  - COALESCE((SELECT SUM(vp.amount) FROM vendor_payments vp WHERE vp.account_id = a.id), 0)
-  + COALESCE((SELECT SUM(CASE WHEN je.direction = 'in' THEN je.amount ELSE -je.amount END)
-              FROM journal_entries je WHERE je.account_id = a.id), 0)
+// Phase B: a Bank & Cash account's balance is now purely the net of every
+// journal line ever posted against its linked Chart of Accounts node
+// (accounts.chart_account_id) - Receipts, Vendor Payments, plain entries,
+// transfers, and its own opening balance all flow through the same
+// journals/journal_lines tables, so summing them here replaces the old
+// opening_balance + receipts + vendor_payments + journal_entries
+// hand-rolled formula entirely. Bank & Cash accounts are always debit-normal
+// (Cash/Bank are Asset accounts), so debit-minus-credit is the balance
+// directly, with no need to look up normal_balance dynamically here.
+// A NULL chart_account_id (an account that has never had a single posting,
+// including no opening balance) correlates to zero rows below and correctly
+// yields 0 via COALESCE. Exported so dashboard.ts's own aggregate balance
+// query can share this exact expression instead of drifting from it.
+export const BALANCE_EXPR = `
+  COALESCE((
+    SELECT SUM(jl.debit) - SUM(jl.credit)
+    FROM journal_lines jl
+    WHERE jl.account_id = a.chart_account_id
+  ), 0)
 `;
 
 async function findById(id: number): Promise<Account | undefined> {
@@ -74,6 +95,9 @@ accountsRouter.get(
   })
 );
 
+// Creating an account and posting its opening-balance journal must succeed
+// or fail together - both writes share one connection/transaction, same
+// reasoning as receipts.ts's own POST route.
 accountsRouter.post(
   "/",
   requireModuleAccess(MODULE, "create"),
@@ -84,8 +108,11 @@ accountsRouter.post(
       return res.status(400).json({ message: "account_type must be 'cash' or 'bank'" });
     }
 
+    const conn = await pool.getConnection();
     try {
-      const [result] = await pool.query<any>(
+      await conn.beginTransaction();
+
+      const [result] = await conn.query<any>(
         `INSERT INTO accounts (company_id, name, account_type, bank_name, account_number, ifsc, opening_balance)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -98,17 +125,41 @@ accountsRouter.post(
           opening_balance || 0,
         ]
       );
-      const created = await findById(result.insertId);
+      const accountId = result.insertId;
+
+      if (Number(opening_balance)) {
+        await postAccountOpeningBalanceJournalTx(conn, {
+          companyId: Number(company_id),
+          accountId,
+          amount: Number(opening_balance),
+          openingDate: new Date().toISOString().slice(0, 10),
+          createdBy: req.user!.sub,
+        });
+      }
+
+      await conn.commit();
+      const created = await findById(accountId);
       res.status(201).json({ account: created });
     } catch (err: any) {
+      await conn.rollback();
       if (err?.code === "ER_DUP_ENTRY") {
         return res.status(400).json({ message: "An account with this name already exists for this company" });
       }
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Account could not be created: ${err.message}` });
+      }
       throw err;
+    } finally {
+      conn.release();
     }
   })
 );
 
+// A posted journal is never edited in place - if the opening balance
+// changes, whatever opening-balance journal currently exists for this
+// account (there's at most one, found via getJournalBySource) is reversed
+// and a fresh one posted for the new figure, exactly like receipts.ts's own
+// PUT route reverses-and-reposts on edit.
 accountsRouter.put(
   "/:id",
   requireModuleAccess(MODULE, "edit"),
@@ -127,8 +178,14 @@ accountsRouter.put(
       return res.status(400).json({ message: "account_type must be 'cash' or 'bank'" });
     }
 
+    const newOpeningBalance = opening_balance ?? existing.opening_balance;
+    const openingBalanceChanged = Number(newOpeningBalance) !== Number(existing.opening_balance);
+
+    const conn = await pool.getConnection();
     try {
-      await pool.query(
+      await conn.beginTransaction();
+
+      await conn.query(
         `UPDATE accounts SET
            name = ?, account_type = ?, bank_name = ?, account_number = ?, ifsc = ?,
            opening_balance = ?, is_active = ?
@@ -139,18 +196,42 @@ accountsRouter.put(
           bank_name || null,
           account_number || null,
           ifsc || null,
-          opening_balance ?? existing.opening_balance,
+          newOpeningBalance,
           is_active === undefined ? existing.is_active : Boolean(is_active),
           id,
         ]
       );
+
+      if (openingBalanceChanged) {
+        const priorJournal = await getJournalBySource("account_opening_balance", id);
+        if (priorJournal) {
+          await reverseJournalTx(conn, priorJournal.id, req.user!.sub);
+        }
+        if (Number(newOpeningBalance)) {
+          await postAccountOpeningBalanceJournalTx(conn, {
+            companyId: existing.company_id,
+            accountId: id,
+            amount: Number(newOpeningBalance),
+            openingDate: new Date().toISOString().slice(0, 10),
+            createdBy: req.user!.sub,
+          });
+        }
+      }
+
+      await conn.commit();
       const updated = await findById(id);
       res.json({ account: updated });
     } catch (err: any) {
+      await conn.rollback();
       if (err?.code === "ER_DUP_ENTRY") {
         return res.status(400).json({ message: "An account with this name already exists for this company" });
       }
+      if (err instanceof AccountingError) {
+        return res.status(400).json({ message: `Account could not be updated: ${err.message}` });
+      }
       throw err;
+    } finally {
+      conn.release();
     }
   })
 );
@@ -167,12 +248,22 @@ accountsRouter.delete(
     const existing = await findById(id);
     if (!existing) return res.status(404).json({ message: "Account not found" });
 
-    const [[receiptCount], [paymentCount], [journalCount]] = await Promise.all([
+    // "Activity" now includes any journal ever posted against this
+    // account's linked Chart of Accounts node - Receipts, Vendor Payments,
+    // plain entries, transfers, AND its own opening balance. An account
+    // that only ever had a non-zero opening balance is therefore no longer
+    // deletable (it used to be, back when opening_balance was just a
+    // static column) - a real, if narrow, behaviour tightening, and the
+    // correct one: deleting it now would silently orphan a real journal.
+    const [journalRows] = await pool.query<any[]>(
+      `SELECT COUNT(*) as c FROM journal_lines jl WHERE jl.account_id = ?`,
+      [existing.chart_account_id ?? 0]
+    );
+    const [[receiptCount], [paymentCount]] = await Promise.all([
       pool.query<any[]>("SELECT COUNT(*) as c FROM receipts WHERE account_id = ?", [id]),
       pool.query<any[]>("SELECT COUNT(*) as c FROM vendor_payments WHERE account_id = ?", [id]),
-      pool.query<any[]>("SELECT COUNT(*) as c FROM journal_entries WHERE account_id = ?", [id]),
     ]);
-    const hasActivity = receiptCount[0].c > 0 || paymentCount[0].c > 0 || journalCount[0].c > 0;
+    const hasActivity = receiptCount[0].c > 0 || paymentCount[0].c > 0 || journalRows[0].c > 0;
     if (hasActivity) {
       return res.status(400).json({ message: "This account has transactions recorded against it and can't be deleted" });
     }
@@ -182,9 +273,23 @@ accountsRouter.delete(
   })
 );
 
-// Chronological ledger for one account - Receipts (in), Vendor Payments
-// (out), and Journal Entries (either), merged and given a running balance
-// starting from the account's opening balance.
+const SOURCE_TYPE_TO_LEDGER: Record<string, LedgerEntry["source_type"]> = {
+  receipt: "receipt",
+  vendor_payment: "vendor_payment",
+  bank_cash_entry: "bank_cash_entry",
+  account_transfer: "account_transfer",
+  account_opening_balance: "account_opening_balance",
+};
+
+// Chronological ledger for one account, now a thin adapter over the real
+// double-entry General Ledger (getLedger, keyed by this account's linked
+// Chart of Accounts node) instead of a hand-rolled UNION of
+// receipts/vendor_payments/journal_entries - Receipts and Vendor Payments
+// already posted journals against this node before Phase B, so this single
+// query picks up everything Phase B's own postings add for free, with
+// correct reversal handling included (getLedger already folds a reversed
+// journal's own lines into the running balance without displaying them
+// twice - see its own comment in accounting.ts).
 accountsRouter.get(
   "/:id/ledger",
   requireModuleAccess(MODULE, "view"),
@@ -197,87 +302,32 @@ accountsRouter.get(
     const account = await findById(id);
     if (!account) return res.status(404).json({ message: "Account not found" });
 
-    const [receipts] = await pool.query<any[]>(
-      `SELECT r.id, r.received_date as entry_date, r.amount, r.reference_no, r.created_at,
-              c.name as customer_name
-       FROM receipts r JOIN customers c ON c.id = r.customer_id
-       WHERE r.account_id = ?`,
-      [id]
-    );
-    const [payments] = await pool.query<any[]>(
-      `SELECT p.id, p.paid_date as entry_date, p.amount, p.reference_no, p.created_at,
-              v.name as vendor_name
-       FROM vendor_payments p JOIN vendors v ON v.id = p.vendor_id
-       WHERE p.account_id = ?`,
-      [id]
-    );
-    const [journalRows] = await pool.query<any[]>(
-      `SELECT id, entry_date, direction, amount, particulars, created_at FROM journal_entries WHERE account_id = ?`,
-      [id]
-    );
+    const chartAccountId = await resolveBankCashChartAccountId(id);
+    if (!chartAccountId) {
+      // No linked Chart of Accounts node yet means literally nothing has
+      // ever been posted against this account (not even an opening
+      // balance) - an empty ledger, not an error.
+      return res.json({ account, openingBalance: 0, entries: [] as LedgerEntry[], closingBalance: 0 });
+    }
 
-    type RawEntry = {
-      id: number;
-      source_type: LedgerEntry["source_type"];
-      entry_date: string;
-      created_at: string;
-      direction: JournalDirection;
-      amount: number;
-      particulars: string;
-    };
+    const result = await getLedger(chartAccountId);
+    const entries: LedgerEntry[] = result.entries
+      .filter((e) => e.source_type && e.source_type in SOURCE_TYPE_TO_LEDGER)
+      .map((e) => {
+        const debit = e.debit;
+        const isIn = debit > 0;
+        return {
+          id: e.journal_id,
+          source_type: SOURCE_TYPE_TO_LEDGER[e.source_type as string],
+          source_id: e.source_id ?? e.journal_id,
+          entry_date: e.journal_date,
+          direction: isIn ? "in" : "out",
+          amount: isIn ? debit : e.credit,
+          particulars: e.description || "-",
+          running_balance: e.running_balance,
+        };
+      });
 
-    const combined: RawEntry[] = [
-      ...receipts.map((r): RawEntry => ({
-        id: r.id,
-        source_type: "receipt",
-        entry_date: r.entry_date,
-        created_at: r.created_at,
-        direction: "in",
-        amount: Number(r.amount),
-        particulars: `Receipt from ${r.customer_name}${r.reference_no ? ` (${r.reference_no})` : ""}`,
-      })),
-      ...payments.map((p): RawEntry => ({
-        id: p.id,
-        source_type: "vendor_payment",
-        entry_date: p.entry_date,
-        created_at: p.created_at,
-        direction: "out",
-        amount: Number(p.amount),
-        particulars: `Payment to ${p.vendor_name}${p.reference_no ? ` (${p.reference_no})` : ""}`,
-      })),
-      ...journalRows.map((j): RawEntry => ({
-        id: j.id,
-        source_type: "journal_entry",
-        entry_date: j.entry_date,
-        created_at: j.created_at,
-        direction: j.direction,
-        amount: Number(j.amount),
-        particulars: j.particulars,
-      })),
-    ];
-
-    combined.sort((a, b) => {
-      const dateCompare = new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime();
-      if (dateCompare !== 0) return dateCompare;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-
-    const openingBalance = Number(account.opening_balance);
-    let running = openingBalance;
-    const entries: LedgerEntry[] = combined.map((e) => {
-      running += e.direction === "in" ? e.amount : -e.amount;
-      return {
-        id: e.id,
-        source_type: e.source_type,
-        source_id: e.id,
-        entry_date: e.entry_date,
-        direction: e.direction,
-        amount: e.amount,
-        particulars: e.particulars,
-        running_balance: running,
-      };
-    });
-
-    res.json({ account, openingBalance, entries, closingBalance: running });
+    res.json({ account, openingBalance: result.openingBalance, entries, closingBalance: result.closingBalance });
   })
 );

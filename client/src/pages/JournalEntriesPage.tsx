@@ -41,6 +41,9 @@ const SOURCE_LABELS: Record<string, string> = {
   expense: "Expense",
   opening_stock: "Opening Stock",
   stock_adjustment: "Stock Adjustment",
+  bank_cash_entry: "Bank/Cash Entry",
+  account_transfer: "Account Transfer",
+  account_opening_balance: "Account Opening Balance",
 };
 
 function sourceLabel(sourceType: string | null): string {

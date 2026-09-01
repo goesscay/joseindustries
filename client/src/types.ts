@@ -433,22 +433,13 @@ export interface Account {
 
 export type JournalDirection = "in" | "out";
 
-export interface JournalEntry {
-  id: number;
-  account_id: number;
-  account_name?: string;
-  entry_date: string;
-  direction: JournalDirection;
-  amount: string;
-  particulars: string;
-  notes: string | null;
-  transfer_group: string | null;
-  created_at: string;
-}
-
+/** One row in an account's ledger view - see src/types.ts's matching
+ * comment on the server side. `source_id` is the underlying journal id for
+ * bank_cash_entry/account_transfer (the only two reversible from this
+ * view). */
 export interface LedgerEntry {
   id: number;
-  source_type: "receipt" | "vendor_payment" | "journal_entry";
+  source_type: "receipt" | "vendor_payment" | "bank_cash_entry" | "account_transfer" | "account_opening_balance";
   source_id: number;
   entry_date: string;
   direction: JournalDirection;

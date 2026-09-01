@@ -388,6 +388,10 @@ export interface Account {
   ifsc: string | null;
   opening_balance: string;
   is_active: boolean | number;
+  /** Chart of Accounts leaf this account's journals post against (Phase B) -
+   * null until the first journal is ever posted for it (see
+   * resolveBankCashChartAccountId). */
+  chart_account_id: number | null;
   created_at: string;
   updated_at: string;
   /** Only present on the list endpoint - opening_balance plus every posted movement. */
@@ -396,24 +400,16 @@ export interface Account {
 
 export type JournalDirection = "in" | "out";
 
-export interface JournalEntry {
-  id: number;
-  account_id: number;
-  entry_date: string;
-  direction: JournalDirection;
-  amount: string;
-  particulars: string;
-  notes: string | null;
-  transfer_group: string | null;
-  created_by: number | null;
-  created_at: string;
-}
-
-/** One row in an account's ledger view - a Receipt, Vendor Payment, or
- * Journal Entry normalized to a common shape, with a running balance. */
+/** One row in an account's ledger view - built from getLedger() against the
+ * account's linked Chart of Accounts node (Phase B), so it covers every
+ * posting type that ever touches a Bank & Cash account: Receipts, Vendor
+ * Payments, plain entries, transfers, and the opening balance. `source_id`
+ * is the underlying `journals.id` for bank_cash_entry/account_transfer (the
+ * only two a user can reverse from this view) - for receipt/vendor_payment
+ * it's that document's own id, kept for display/navigation only. */
 export interface LedgerEntry {
   id: number;
-  source_type: "receipt" | "vendor_payment" | "journal_entry";
+  source_type: "receipt" | "vendor_payment" | "bank_cash_entry" | "account_transfer" | "account_opening_balance";
   source_id: number;
   entry_date: string;
   direction: JournalDirection;

@@ -128,22 +128,85 @@ export async function getSystemAccountByCategory(companyId: number, category: st
 }
 
 /**
+ * Creates a fresh Chart of Accounts leaf, as a child of the company's
+ * generic system Cash/Bank node, dedicated to one Bank & Cash `accounts`
+ * row - used when that generic node is already claimed by a different
+ * account of the same type (see resolveBankCashChartAccountId below). Named
+ * after the Bank & Cash account itself (e.g. "HDFC Current Account") so it
+ * reads clearly in the Trial Balance/General Ledger, with a code derived
+ * from the parent's ("1120" -> "1120-2", "1120-3", ...). Retries a handful
+ * of times on a code collision (two accounts created in the same instant)
+ * rather than trusting a single COUNT(*) to be race-free.
+ */
+async function createDedicatedBankCashChartAccount(
+  runner: PoolConnection | typeof pool,
+  companyId: number,
+  parentId: number,
+  accountName: string
+): Promise<number> {
+  const [parentRows] = await runner.query<any[]>(
+    "SELECT account_code, account_type, category, normal_balance FROM chart_of_accounts WHERE id = ?",
+    [parentId]
+  );
+  const parent = parentRows[0];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const [siblingRows] = await runner.query<any[]>("SELECT COUNT(*) as c FROM chart_of_accounts WHERE parent_id = ?", [
+      parentId,
+    ]);
+    // The parent itself is conceptually "1" - the first dedicated sibling is "2".
+    const code = `${parent.account_code}-${Number(siblingRows[0].c) + 2 + attempt}`;
+    try {
+      const [result] = await runner.query<any>(
+        `INSERT INTO chart_of_accounts (company_id, parent_id, account_code, name, account_type, category, normal_balance, is_system)
+         VALUES (?, ?, ?, ?, ?, ?, ?, FALSE)`,
+        [companyId, parentId, code, accountName, parent.account_type, parent.category, parent.normal_balance]
+      );
+      return result.insertId;
+    } catch (err: any) {
+      if (err?.code === "ER_DUP_ENTRY" && attempt < 4) continue;
+      throw err;
+    }
+  }
+  throw new AccountingError("Could not allocate a Chart of Accounts code for this account");
+}
+
+/**
  * Resolves the Chart-of-Accounts row backing an existing Bank & Cash
  * `accounts` row, so callers never have to hard-code a Chart of Accounts
  * id. Uses the stored `accounts.chart_account_id` link when present
  * (backfilled by schema.sql's migration for every account that existed at
- * the time); otherwise falls back to the company's generic system
- * Cash/Bank node by `account_type` - the same mapping the backfill itself
- * uses - which covers any Bank & Cash account created *after* that
- * migration ran (accounts.ts's own POST route doesn't set this column).
- * The link is healed in place so the fallback only runs once per account.
- * Returns undefined if the account doesn't exist or truly has no
- * corresponding system node - callers must treat that as "cannot post a
- * journal for this account", never guess one.
+ * the time); otherwise resolves one on first use and heals the link in
+ * place so this only runs once per account:
+ *   - the FIRST Bank & Cash account of a given type (Cash/Bank) for a
+ *     company reuses that company's generic seeded system node ("1110
+ *     Cash"/"1120 Bank") directly - matching the historical 1:1 mapping
+ *     schema.sql's own migration already assumed for every account that
+ *     existed before this function could create anything else.
+ *   - any ADDITIONAL account of the same type gets its own dedicated leaf
+ *     (via createDedicatedBankCashChartAccount) instead of also being
+ *     pointed at that same shared node. Two real bank accounts sharing one
+ *     Chart of Accounts node would merge their balances and ledgers
+ *     together the moment either one posted anything - a real bug, not a
+ *     theoretical one, caught during Phase B's own verification the moment
+ *     a second Bank account was created for a company that already had one.
+ * Returns undefined if the account doesn't exist or the company has no
+ * seeded system node for this type at all - callers must treat that as
+ * "cannot post a journal for this account", never guess one.
+ *
+ * Accepts an optional `conn` so a caller already inside a transaction (e.g.
+ * accounts.ts's POST route, which creates the `accounts` row and posts its
+ * opening-balance journal in the same transaction) can resolve an account
+ * that hasn't been committed yet - querying via the bare `pool` here would
+ * open a second connection that can't see the other connection's
+ * uncommitted insert and would wrongly report the account as not found.
  */
-export async function resolveBankCashChartAccountId(accountId: number): Promise<number | undefined> {
-  const [rows] = await pool.query<any[]>(
-    "SELECT id, company_id, account_type, chart_account_id FROM accounts WHERE id = ? LIMIT 1",
+export async function resolveBankCashChartAccountId(
+  accountId: number,
+  conn?: PoolConnection
+): Promise<number | undefined> {
+  const runner = conn ?? pool;
+  const [rows] = await runner.query<any[]>(
+    "SELECT id, company_id, name, account_type, chart_account_id FROM accounts WHERE id = ? LIMIT 1",
     [accountId]
   );
   const account = rows[0];
@@ -151,10 +214,18 @@ export async function resolveBankCashChartAccountId(accountId: number): Promise<
   if (account.chart_account_id) return account.chart_account_id as number;
 
   const category = account.account_type === "cash" ? "Cash" : "Bank";
-  const coaId = await getSystemAccountByCategory(account.company_id, category);
-  if (!coaId) return undefined;
+  const systemAccountId = await getSystemAccountByCategory(account.company_id, category);
+  if (!systemAccountId) return undefined;
 
-  await pool.query("UPDATE accounts SET chart_account_id = ? WHERE id = ? AND chart_account_id IS NULL", [
+  const [claimedRows] = await runner.query<any[]>(
+    "SELECT id FROM accounts WHERE company_id = ? AND chart_account_id = ? AND id != ? LIMIT 1",
+    [account.company_id, systemAccountId, accountId]
+  );
+  const coaId = claimedRows[0]
+    ? await createDedicatedBankCashChartAccount(runner, account.company_id, systemAccountId, account.name)
+    : systemAccountId;
+
+  await runner.query("UPDATE accounts SET chart_account_id = ? WHERE id = ? AND chart_account_id IS NULL", [
     coaId,
     accountId,
   ]);
@@ -373,7 +444,7 @@ export interface PostReceiptJournalInput {
  * the whole transaction rather than leave the receipt unposted.
  */
 export async function postReceiptJournalTx(conn: PoolConnection, input: PostReceiptJournalInput): Promise<Journal> {
-  const bankChartAccountId = await resolveBankCashChartAccountId(input.accountId);
+  const bankChartAccountId = await resolveBankCashChartAccountId(input.accountId, conn);
   if (!bankChartAccountId) {
     throw new AccountingError("Selected account has no linked Chart of Accounts Bank/Cash account");
   }
@@ -417,7 +488,7 @@ export async function postVendorPaymentJournalTx(
   conn: PoolConnection,
   input: PostVendorPaymentJournalInput
 ): Promise<Journal> {
-  const bankChartAccountId = await resolveBankCashChartAccountId(input.accountId);
+  const bankChartAccountId = await resolveBankCashChartAccountId(input.accountId, conn);
   if (!bankChartAccountId) {
     throw new AccountingError("Selected account has no linked Chart of Accounts Bank/Cash account");
   }
@@ -941,6 +1012,175 @@ export async function postPurchaseBillJournalTx(conn: PoolConnection, input: Pos
     description,
     created_by: input.createdBy,
     lines,
+  });
+}
+
+// ----------------------------------------------------------------------------
+// Phase B (Bank & Cash): the three postings below are what replace the old
+// `journal_entries` table's create/transfer/opening-balance flows. All three
+// exist for exactly the same reason postReceiptJournalTx/
+// postVendorPaymentJournalTx do further up this file - a Bank & Cash
+// `accounts` row is never itself a Chart of Accounts leaf, so every one of
+// these resolves the real posting target via resolveBankCashChartAccountId
+// first and throws AccountingError (rolling back the caller's transaction)
+// if that account has no linked node.
+// ----------------------------------------------------------------------------
+
+export interface PostAccountOpeningBalanceJournalInput {
+  companyId: number;
+  accountId: number;
+  amount: number;
+  openingDate: string;
+  createdBy: number | null;
+}
+
+/**
+ * Dr Bank/Cash, Cr Capital - a Bank & Cash account's opening balance is
+ * owner's capital brought into the business, the same contra account
+ * postOpeningStockJournalTx uses for opening stock. `amount` may be
+ * negative (an account that opened overdrawn) - the sign flows through to
+ * which side gets the balancing figure via the same debit/credit split
+ * every other posting function here uses; validateJournalLines still
+ * rejects a zero amount (nothing to post) via its "lines must move
+ * something" rule, so callers should skip calling this entirely when the
+ * opening balance is 0, same as they already skip a $0 receipt account.
+ */
+export async function postAccountOpeningBalanceJournalTx(
+  conn: PoolConnection,
+  input: PostAccountOpeningBalanceJournalInput
+): Promise<Journal> {
+  const bankChartAccountId = await resolveBankCashChartAccountId(input.accountId, conn);
+  if (!bankChartAccountId) {
+    throw new AccountingError("Selected account has no linked Chart of Accounts Bank/Cash account");
+  }
+  const capitalAccountId = await getSystemAccountByCategory(input.companyId, "Capital");
+  if (!capitalAccountId) {
+    throw new AccountingError("Capital system account not found for this company");
+  }
+
+  const amount = round2(Math.abs(input.amount));
+  const description = "Opening balance";
+  const debitFirst = input.amount >= 0;
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.openingDate,
+    reference: null,
+    source_type: "account_opening_balance",
+    source_id: input.accountId,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: bankChartAccountId, debit: debitFirst ? amount : 0, credit: debitFirst ? 0 : amount, description },
+      { account_id: capitalAccountId, debit: debitFirst ? 0 : amount, credit: debitFirst ? amount : 0, description },
+    ],
+  });
+}
+
+export interface PostBankCashEntryJournalInput {
+  companyId: number;
+  accountId: number;
+  /** The other side of this entry - whatever the money actually moved
+   * against (Bank Charges, Interest Income, Owner's Capital, ...). A plain
+   * Bank & Cash entry always needs one, unlike Receipts/Vendor Payments
+   * which have a fixed contra (Accounts Receivable/Payable). */
+  contraAccountId: number;
+  direction: "in" | "out";
+  amount: number;
+  entryDate: string;
+  particulars: string;
+  notes?: string | null;
+  createdBy: number | null;
+}
+
+/** journals.description is VARCHAR(255) - folds an optional free-text note
+ * onto the end of a base description, truncating rather than erroring if
+ * the combination would overflow the column. */
+function withNotes(base: string, notes?: string | null): string {
+  const combined = notes ? `${base} (${notes})` : base;
+  return combined.length > 255 ? combined.slice(0, 255) : combined;
+}
+
+/**
+ * direction 'in': Dr Bank/Cash, Cr contra account.
+ * direction 'out': Dr contra account, Cr Bank/Cash.
+ * source_id is left null - unlike Receipts/Vendor Payments there is no
+ * separate business record this posting belongs to any more (the old
+ * journal_entries row is gone); the journal itself IS the record.
+ */
+export async function postBankCashEntryJournalTx(
+  conn: PoolConnection,
+  input: PostBankCashEntryJournalInput
+): Promise<Journal> {
+  const bankChartAccountId = await resolveBankCashChartAccountId(input.accountId, conn);
+  if (!bankChartAccountId) {
+    throw new AccountingError("Selected account has no linked Chart of Accounts Bank/Cash account");
+  }
+
+  const amount = round2(input.amount);
+  const description = withNotes(input.particulars, input.notes);
+  const inDirection = input.direction === "in";
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.entryDate,
+    reference: null,
+    source_type: "bank_cash_entry",
+    source_id: null,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: bankChartAccountId, debit: inDirection ? amount : 0, credit: inDirection ? 0 : amount, description },
+      { account_id: input.contraAccountId, debit: inDirection ? 0 : amount, credit: inDirection ? amount : 0, description },
+    ],
+  });
+}
+
+export interface PostAccountTransferJournalInput {
+  companyId: number;
+  fromAccountId: number;
+  toAccountId: number;
+  amount: number;
+  entryDate: string;
+  fromAccountName: string;
+  toAccountName: string;
+  notes?: string | null;
+  createdBy: number | null;
+}
+
+/**
+ * Dr destination Bank/Cash, Cr source Bank/Cash - a transfer between two of
+ * a company's own accounts is a single balanced journal now, replacing the
+ * old two-linked-journal_entries-rows-sharing-a-transfer_group hack. Both
+ * accounts must belong to `companyId` - createJournalTx's own company-match
+ * check (via insertJournalRows) already enforces this, so a cross-company
+ * transfer is rejected the same way a cross-company manual journal would be.
+ */
+export async function postAccountTransferJournalTx(
+  conn: PoolConnection,
+  input: PostAccountTransferJournalInput
+): Promise<Journal> {
+  const fromChartAccountId = await resolveBankCashChartAccountId(input.fromAccountId, conn);
+  if (!fromChartAccountId) {
+    throw new AccountingError("Source account has no linked Chart of Accounts Bank/Cash account");
+  }
+  const toChartAccountId = await resolveBankCashChartAccountId(input.toAccountId, conn);
+  if (!toChartAccountId) {
+    throw new AccountingError("Destination account has no linked Chart of Accounts Bank/Cash account");
+  }
+
+  const amount = round2(input.amount);
+  const description = withNotes(`Transfer: ${input.fromAccountName} to ${input.toAccountName}`, input.notes);
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.entryDate,
+    reference: null,
+    source_type: "account_transfer",
+    source_id: null,
+    description,
+    created_by: input.createdBy,
+    lines: [
+      { account_id: toChartAccountId, debit: amount, credit: 0, description },
+      { account_id: fromChartAccountId, debit: 0, credit: amount, description },
+    ],
   });
 }
 
