@@ -140,7 +140,7 @@ export function AppLayout() {
                 { key: "/accounts", icon: <CreditCardOutlined />, label: "Bank & Cash" },
                 { key: "/banking/transactions", icon: <HistoryOutlined />, label: comingSoonLabel("Transactions"), disabled: true },
                 { key: "/banking/transfers", icon: <SwapOutlined />, label: comingSoonLabel("Transfers"), disabled: true },
-                { key: "/banking/reconciliation", icon: <FileSyncOutlined />, label: comingSoonLabel("Reconciliation"), disabled: true },
+                { key: "/banking/reconciliation", icon: <FileSyncOutlined />, label: "Reconciliation" },
               ],
             },
             {

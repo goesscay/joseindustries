@@ -889,3 +889,43 @@ export interface InsufficientStockItem {
   requestedQty: number;
   availableQty: number;
 }
+
+// ---- Double-entry rollout, Phase E: Bank Reconciliation ----
+
+export type BankReconciliationStatus = "in_progress" | "completed";
+
+export interface BankReconciliation {
+  id: number;
+  account_id: number;
+  company_id: number;
+  statement_date: string;
+  statement_balance: string;
+  status: BankReconciliationStatus;
+  created_by: number | null;
+  created_at: string;
+  completed_at: string | null;
+  /** Only present when joined for display - see bankReconciliations.ts's findById/list queries. */
+  account_name?: string;
+  company_name?: string;
+  company_code?: string;
+}
+
+export interface BankReconciliationLine {
+  id: number;
+  journal_id: number;
+  journal_date: string;
+  description: string | null;
+  source_type: string | null;
+  source_id: number | null;
+  debit: number;
+  credit: number;
+}
+
+export interface BankReconciliationWorksheet {
+  reconciliation: BankReconciliation;
+  openingBalance: number;
+  clearedLines: BankReconciliationLine[];
+  unclearedLines: BankReconciliationLine[];
+  clearedTotal: number;
+  difference: number;
+}

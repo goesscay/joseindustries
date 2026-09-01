@@ -320,6 +320,25 @@ async function insertReversalRows(conn: PoolConnection, journalId: number, userI
   if (original.status === "reversed") {
     throw new AccountingError("This journal has already been reversed");
   }
+  // Phase E: a journal line that's been matched to a bank statement
+  // (journal_lines.reconciled_at set, via a completed Bank Reconciliation)
+  // can never be reversed out from under that reconciliation - this is the
+  // one central choke point every reversal path in the app goes through
+  // (reverseJournal/reverseJournalTx, which every Receipt/Vendor
+  // Payment/Bank & Cash Entry/Transfer/Credit Note/Debit Note/manual
+  // Journal Entry edit-or-delete flow calls), so the guard only needs to
+  // live here once. The fix is to reopen the reconciliation
+  // (POST /bank-reconciliations/:id/reopen) and explicitly un-clear the
+  // specific line first - see schema.sql's comment on bank_reconciliations.
+  const [reconciledRows] = await conn.query<any[]>(
+    "SELECT COUNT(*) as c FROM journal_lines WHERE journal_id = ? AND reconciled_at IS NOT NULL",
+    [journalId]
+  );
+  if (Number(reconciledRows[0].c) > 0) {
+    throw new AccountingError(
+      "This entry has already been matched in a bank reconciliation and can't be reversed. Reopen the reconciliation first."
+    );
+  }
 
   const lines = await getJournalLinesConn(conn, journalId);
   const reversedLines: JournalLineInput[] = lines.map((l) => ({

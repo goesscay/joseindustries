@@ -605,6 +605,50 @@ export interface StockTransaction {
   created_at: string;
 }
 
+// ---- Double-entry rollout, Phase E: Bank Reconciliation - see schema.sql's
+// comment on bank_reconciliations for the full design. ----
+
+export type BankReconciliationStatus = "in_progress" | "completed";
+
+export interface BankReconciliation {
+  id: number;
+  account_id: number;
+  company_id: number;
+  statement_date: string;
+  statement_balance: string;
+  status: BankReconciliationStatus;
+  created_by: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+/** One journal_lines row surfaced on a reconciliation worksheet - never the
+ * full JournalLine shape, just what the worksheet UI needs to display and
+ * let the user toggle cleared/uncleared. */
+export interface BankReconciliationLine {
+  id: number;
+  journal_id: number;
+  journal_date: string;
+  description: string | null;
+  source_type: string | null;
+  source_id: number | null;
+  debit: number;
+  credit: number;
+}
+
+/** Response shape for every bank-reconciliations endpoint that returns a
+ * working worksheet (GET /:id, POST /, PATCH /:id, PATCH /:id/lines,
+ * POST /:id/complete, POST /:id/reopen) - always freshly recomputed
+ * server-side, never trusted from the client. */
+export interface BankReconciliationWorksheet {
+  reconciliation: BankReconciliation;
+  openingBalance: number;
+  clearedLines: BankReconciliationLine[];
+  unclearedLines: BankReconciliationLine[];
+  clearedTotal: number;
+  difference: number;
+}
+
 declare global {
   namespace Express {
     interface Request {

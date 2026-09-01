@@ -26,6 +26,7 @@ export const ROUTE_MODULE: Record<string, string> = {
   "/purchases/debit-notes": "purchases.debit_notes",
   "/expense-categories": "expenses.expense_categories",
   "/accounts": "banking.accounts",
+  "/banking/reconciliation": "banking.reconciliation",
   "/accounting/chart-of-accounts": "accounting.chart_of_accounts",
   "/accounting/journals": "accounting.journals",
   "/customers": "contacts.customers",

@@ -23,6 +23,7 @@ import { PurchaseBillsPage } from "./pages/PurchaseBillsPage";
 import { CreditNotesPage } from "./pages/CreditNotesPage";
 import { DebitNotesPage } from "./pages/DebitNotesPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { BankReconciliationPage } from "./pages/BankReconciliationPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { JournalEntriesPage } from "./pages/JournalEntriesPage";
 import { ReportsPage } from "./pages/ReportsPage";
@@ -118,6 +119,14 @@ function App() {
             }
           />
           <Route path="/accounts" element={<ModuleGate module="banking.accounts"><AccountsPage /></ModuleGate>} />
+          <Route
+            path="/banking/reconciliation"
+            element={
+              <ModuleGate module="banking.reconciliation">
+                <BankReconciliationPage />
+              </ModuleGate>
+            }
+          />
           <Route
             path="/accounting/chart-of-accounts"
             element={

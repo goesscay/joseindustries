@@ -1174,3 +1174,66 @@ CREATE TABLE IF NOT EXISTS debit_note_items (
   FOREIGN KEY (debit_note_id) REFERENCES debit_notes(id) ON DELETE CASCADE,
   FOREIGN KEY (item_id) REFERENCES items(id)
 );
+
+-- ============================================================================
+-- Double-entry rollout, Phase E: Bank Reconciliation. Matches the book-side
+-- ledger of one Bank/Cash account against a real-world bank statement as of
+-- a chosen date, so a user can be confident every posted Receipt/Vendor
+-- Payment/Bank & Cash Entry/Transfer/Opening Balance actually corresponds to
+-- something the bank also shows - and catch the ones that don't (a bounced
+-- cheque, a duplicate entry, a bank fee never recorded).
+--
+-- Design: which ledger rows are "cleared" lives directly on journal_lines
+-- (reconciled_at/bank_reconciliation_id) rather than a separate join table.
+-- This is safe because a Bank/Cash account's linked Chart of Accounts leaf
+-- only ever receives ONE journal_line per journal (see
+-- resolveBankCashChartAccountId's 1:1 account<->leaf mapping and every
+-- Phase B posting function's shape) - so "is this ledger row cleared" maps
+-- 1:1 onto "does this journal_lines row have reconciled_at set", with no
+-- need for a many-to-many mapping table.
+--
+-- bank_reconciliations is one row per reconciliation attempt (in_progress or
+-- completed) for one account as of one statement date. Completing one is
+-- refused unless the statement balance and the cleared book balance match
+-- exactly (server-enforced in src/routes/bankReconciliations.ts - the same
+-- "must balance" discipline the rest of this app applies to debits vs
+-- credits, applied here to a real-world source instead). Reconciled lines
+-- are also protected centrally: src/services/accounting.ts's
+-- insertReversalRows refuses to reverse any journal that has a reconciled
+-- line, so a Receipt/Vendor Payment/Bank & Cash Entry/Transfer that's
+-- already been matched to a bank statement can't be silently edited or
+-- deleted out from under a completed reconciliation - it must be reopened
+-- (POST /bank-reconciliations/:id/reopen) first, which puts the
+-- reconciliation back in_progress without blanket-unclearing every line, so
+-- the user explicitly un-clears only the ones that actually need fixing via
+-- PATCH /bank-reconciliations/:id/lines.
+--
+-- No DB-level FK from journal_lines.bank_reconciliation_id to
+-- bank_reconciliations(id) - same convention as accounts.account_id /
+-- receipts.account_id elsewhere in this file (MariaDB's ADD COLUMN IF NOT
+-- EXISTS doesn't extend to ADD CONSTRAINT, and this schema never mixes the
+-- two - the app enforces the reference on write instead).
+-- ============================================================================
+
+ALTER TABLE journal_lines
+  ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMP NULL,
+  ADD COLUMN IF NOT EXISTS bank_reconciliation_id INT UNSIGNED NULL;
+
+ALTER TABLE journal_lines ADD INDEX IF NOT EXISTS idx_journal_lines_reconciliation (bank_reconciliation_id);
+
+CREATE TABLE IF NOT EXISTS bank_reconciliations (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  account_id INT UNSIGNED NOT NULL,
+  company_id INT UNSIGNED NOT NULL,
+  statement_date DATE NOT NULL,
+  statement_balance DECIMAL(12, 2) NOT NULL,
+  status ENUM('in_progress', 'completed') NOT NULL DEFAULT 'in_progress',
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP NULL,
+  FOREIGN KEY (account_id) REFERENCES accounts(id),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+ALTER TABLE bank_reconciliations ADD INDEX IF NOT EXISTS idx_bank_reconciliations_account (account_id, statement_date);

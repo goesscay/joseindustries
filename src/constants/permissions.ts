@@ -32,6 +32,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   { key: "purchases.debit_notes", label: "Debit Notes", group: "Purchases" },
 
   { key: "banking.accounts", label: "Bank & Cash", group: "Banking" },
+  { key: "banking.reconciliation", label: "Bank Reconciliation", group: "Banking" },
 
   // Phase 2 accounting foundation - no frontend page consumes this yet
   // (backend-only for now), but the module key exists so its routes are
