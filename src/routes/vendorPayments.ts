@@ -31,10 +31,10 @@ vendorPaymentsRouter.get(
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
     const [rows] = await pool.query<any[]>(
-      `SELECT p.*, v.name as vendor_name, co.name as company_name, co.code as company_code,
+      `SELECT p.*, COALESCE(v.name, 'Unspecified') as vendor_name, co.name as company_name, co.code as company_code,
               e.expense_no as expense_number
        FROM vendor_payments p
-       JOIN vendors v ON v.id = p.vendor_id
+       LEFT JOIN vendors v ON v.id = p.vendor_id
        JOIN companies co ON co.id = p.company_id
        LEFT JOIN expenses e ON e.id = p.expense_id
        WHERE 1=1 ${searchClause}
@@ -43,7 +43,7 @@ vendorPaymentsRouter.get(
       [...searchParams, perPage, offset]
     );
     const [countRows] = await pool.query<any[]>(
-      `SELECT COUNT(*) as total FROM vendor_payments p JOIN vendors v ON v.id = p.vendor_id WHERE 1=1 ${searchClause}`,
+      `SELECT COUNT(*) as total FROM vendor_payments p LEFT JOIN vendors v ON v.id = p.vendor_id WHERE 1=1 ${searchClause}`,
       searchParams
     );
 
@@ -64,8 +64,15 @@ vendorPaymentsRouter.get(
 async function validatePayload(body: any, userId: number, userRole: Role) {
   const { company_id, vendor_id, expense_id, account_id, amount, payment_mode, paid_date } = body ?? {};
 
-  if (!company_id || !vendor_id || !amount || !payment_mode || !paid_date) {
-    return { error: "company_id, vendor_id, amount, payment_mode and paid_date are required" };
+  if (!company_id || !amount || !payment_mode || !paid_date) {
+    return { error: "company_id, amount, payment_mode and paid_date are required" };
+  }
+  // A payment must be attributed to *something* - either a vendor (an
+  // on-account payment, or one against one of that vendor's expenses), or a
+  // specific expense (which may itself be vendor-less - see the vendor_id
+  // check below). "Neither" would be a payment nobody can trace.
+  if (!vendor_id && !expense_id) {
+    return { error: "Select a vendor, or a specific expense to pay" };
   }
   if (!PAYMENT_MODES.includes(payment_mode)) {
     return { error: "Invalid payment_mode" };
@@ -78,17 +85,29 @@ async function validatePayload(body: any, userId: number, userRole: Role) {
   const company = companyRows[0] as Company | undefined;
   if (!company) return { error: "Company not found" };
 
-  const [vendorRows] = await pool.query<any[]>("SELECT * FROM vendors WHERE id = ?", [vendor_id]);
-  const vendor = vendorRows[0] as Vendor | undefined;
-  if (!vendor) return { error: "Vendor not found" };
+  let vendor: Vendor | undefined;
+  if (vendor_id) {
+    const [vendorRows] = await pool.query<any[]>("SELECT * FROM vendors WHERE id = ?", [vendor_id]);
+    vendor = vendorRows[0] as Vendor | undefined;
+    if (!vendor) return { error: "Vendor not found" };
+  }
 
+  // Phase C: expenses.vendor_id has always been nullable (a petty-cash
+  // purchase with no vendor tracked) - a payment against such an expense
+  // must stay vendor-less too, exactly matching the expense it pays. A
+  // payment against a vendor-attributed expense must still name that same
+  // vendor - never a different, or absent, one.
   let expense: Expense | undefined;
   if (expense_id) {
     const [expenseRows] = await pool.query<any[]>("SELECT * FROM expenses WHERE id = ?", [expense_id]);
     expense = expenseRows[0] as Expense | undefined;
     if (!expense) return { error: "Expense not found" };
-    if (expense.vendor_id !== Number(vendor_id)) {
-      return { error: "Selected expense does not belong to this vendor" };
+    if (expense.vendor_id) {
+      if (Number(vendor_id) !== expense.vendor_id) {
+        return { error: "Selected expense does not belong to this vendor" };
+      }
+    } else if (vendor_id) {
+      return { error: "This expense has no vendor - remove the vendor, or pick a different expense" };
     }
   }
 
@@ -140,7 +159,7 @@ vendorPaymentsRouter.post(
           docNumber,
           financialYear,
           req.body.company_id,
-          vendor_id,
+          vendor_id || null,
           expense_id || null,
           account_id || null,
           amount,
@@ -217,7 +236,7 @@ vendorPaymentsRouter.put(
          WHERE id = ?`,
         [
           req.body.company_id,
-          vendor_id,
+          vendor_id || null,
           expense_id || null,
           account_id || null,
           amount,

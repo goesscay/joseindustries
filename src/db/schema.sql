@@ -221,13 +221,17 @@ CREATE TABLE IF NOT EXISTS expenses (
 );
 
 -- Money paid out - against a specific expense/bill, or on-account to a vendor
--- (expense_id NULL). Mirrors receipts.
+-- (expense_id NULL). Mirrors receipts. vendor_id is nullable (Phase C of the
+-- double-entry rollout) so a payment against a vendor-less expense
+-- (expenses.vendor_id is already nullable - a petty-cash purchase with no
+-- vendor tracked) can actually be recorded - see the ALTER below for why
+-- this matters for databases created before this column allowed NULL.
 CREATE TABLE IF NOT EXISTS vendor_payments (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   payment_no VARCHAR(40) NOT NULL,
   financial_year VARCHAR(10) NOT NULL,
   company_id INT UNSIGNED NOT NULL,
-  vendor_id INT UNSIGNED NOT NULL,
+  vendor_id INT UNSIGNED NULL,
   expense_id INT UNSIGNED NULL,
   amount DECIMAL(12, 2) NOT NULL,
   payment_mode ENUM('cash', 'cheque', 'bank_transfer', 'upi', 'card', 'other') NOT NULL DEFAULT 'cash',
@@ -1022,3 +1026,20 @@ ALTER TABLE stock_transactions ADD INDEX IF NOT EXISTS idx_stock_txn_source (sou
 -- (non-unique) index purely to make that existence check fast, not a
 -- database-enforced guarantee.
 ALTER TABLE stock_transactions ADD INDEX IF NOT EXISTS idx_stock_txn_opening (company_id, item_id, txn_type, status);
+
+-- ============================================================================
+-- Double-entry rollout, Phase C: a vendor-less Expense (expenses.vendor_id
+-- has always been nullable - a petty-cash purchase with no vendor tracked)
+-- could never actually be paid, because vendor_payments.vendor_id was
+-- NOT NULL: recording ANY payment against such an expense failed validation
+-- in src/routes/vendorPayments.ts (`expense.vendor_id !== vendor_id` is
+-- always true when expense.vendor_id is null, whatever vendor was picked),
+-- and the Vendor Payments UI never even offered such an expense as an option
+-- in the first place (its expense picker only ever showed expenses matching
+-- the already-selected vendor). MODIFY COLUMN (not ADD COLUMN) is used here
+-- since this is loosening an existing constraint, not adding a new column -
+-- unlike this file's usual ADD COLUMN IF NOT EXISTS guard, MODIFY COLUMN is
+-- naturally idempotent (redefining a column to what it already is is a
+-- no-op), so no guard is needed.
+-- ============================================================================
+ALTER TABLE vendor_payments MODIFY COLUMN vendor_id INT UNSIGNED NULL;

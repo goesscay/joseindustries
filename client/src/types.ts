@@ -304,7 +304,9 @@ export interface VendorPayment {
   company_id: number;
   company_name?: string;
   company_code?: string;
-  vendor_id: number;
+  /** Nullable (Phase C) - a payment against a vendor-less expense has no
+   * vendor either. */
+  vendor_id: number | null;
   vendor_name?: string;
   expense_id: number | null;
   expense_number?: string;

@@ -37,9 +37,9 @@ reportsRouter.get(
     );
     const [payments] = await pool.query<any[]>(
       `SELECT p.id, p.paid_date as entry_date, p.amount, p.reference_no, p.created_at,
-              v.name as party_name, a.name as account_name
+              COALESCE(v.name, 'Unspecified vendor') as party_name, a.name as account_name
        FROM vendor_payments p
-       JOIN vendors v ON v.id = p.vendor_id
+       LEFT JOIN vendors v ON v.id = p.vendor_id
        LEFT JOIN accounts a ON a.id = p.account_id
        WHERE p.company_id = ? AND p.paid_date BETWEEN ? AND ?`,
       [companyId, from, to]

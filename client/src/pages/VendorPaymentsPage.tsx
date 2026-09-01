@@ -42,6 +42,11 @@ export function VendorPaymentsPage() {
   const canDelete = can("expenses.vendor_payments", "delete");
   const selectedVendorId = Form.useWatch("vendor_id", form);
   const selectedCompanyId = Form.useWatch("company_id", form);
+  const selectedExpenseId = Form.useWatch("expense_id", form);
+  // Once a specific expense is chosen, the vendor is fully determined by it
+  // (and locked from further editing) - including the vendor-less case,
+  // where the payment must stay vendor-less too (Phase C).
+  const expenseLocksVendor = !!selectedExpenseId;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,7 +95,8 @@ export function VendorPaymentsPage() {
     .filter((exp) => !selectedVendorId || exp.vendor_id === selectedVendorId)
     .map((exp) => {
       const balance = Number(exp.total_amount) - Number(exp.paid_amount ?? 0);
-      return { value: exp.id, label: `${exp.expense_no} - Balance Rs. ${balance.toFixed(2)}` };
+      const vendorHint = exp.vendor_id ? "" : " - no vendor";
+      return { value: exp.id, label: `${exp.expense_no} - Balance Rs. ${balance.toFixed(2)}${vendorHint}` };
     });
 
   const accountOptions = accounts
@@ -251,12 +257,26 @@ export function VendorPaymentsPage() {
               onChange={() => form.setFieldsValue({ account_id: undefined })}
             />
           </Form.Item>
-          <Form.Item name="vendor_id" label="Vendor" rules={[{ required: true, message: "Vendor is required" }]}>
+          <Form.Item
+            name="vendor_id"
+            label="Vendor"
+            rules={[
+              {
+                validator: async (_, value) => {
+                  if (!value && !expenseLocksVendor) {
+                    throw new Error("Select a vendor, or pick a specific expense to pay");
+                  }
+                },
+              },
+            ]}
+          >
             <RemoteSelect<Vendor>
+              allowClear
+              disabled={expenseLocksVendor}
               searchPath="/vendors"
               mapOption={(v) => ({ value: v.id, label: v.name })}
               extraOptions={vendors.map((v) => ({ value: v.id, label: v.name }))}
-              placeholder="Select vendor"
+              placeholder={expenseLocksVendor ? "Determined by the selected expense" : "Select vendor"}
               onChange={() => form.setFieldsValue({ expense_id: undefined })}
             />
           </Form.Item>
@@ -267,6 +287,13 @@ export function VendorPaymentsPage() {
               placeholder="Select expense"
               options={expenseOptions}
               filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+              onChange={(expenseId: number | undefined) => {
+                const exp = expenses.find((e) => e.id === expenseId);
+                if (exp) {
+                  form.setFieldsValue({ vendor_id: exp.vendor_id ?? undefined });
+                }
+                form.validateFields(["vendor_id"]);
+              }}
             />
           </Form.Item>
           <Form.Item name="amount" label="Amount Paid" rules={[{ required: true, message: "Amount is required" }]}>

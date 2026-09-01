@@ -86,8 +86,8 @@ dashboardRouter.get(
       companyParam
     );
     const [recentPayments] = await pool.query<any[]>(
-      `SELECT p.id, p.paid_date as entry_date, p.amount, p.created_at, v.name as party_name
-       FROM vendor_payments p JOIN vendors v ON v.id = p.vendor_id
+      `SELECT p.id, p.paid_date as entry_date, p.amount, p.created_at, COALESCE(v.name, 'Unspecified vendor') as party_name
+       FROM vendor_payments p LEFT JOIN vendors v ON v.id = p.vendor_id
        WHERE 1=1 ${companyId ? "AND p.company_id = ?" : ""}
        ORDER BY p.created_at DESC LIMIT 8`,
       companyParam
