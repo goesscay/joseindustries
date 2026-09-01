@@ -685,6 +685,26 @@ export interface FixedAssetDepreciationEntry {
   created_at: string;
 }
 
+// ---- Double-entry rollout, Phase G: Year-End Closing / Period Lock - see
+// schema.sql's comment on financial_year_closings for the full design. ----
+
+export type FinancialYearClosingStatus = "closed" | "reopened";
+
+export interface FinancialYearClosing {
+  id: number;
+  company_id: number;
+  financial_year: string;
+  start_date: string;
+  end_date: string;
+  status: FinancialYearClosingStatus;
+  net_profit: string;
+  closing_journal_id: number | null;
+  closed_by: number | null;
+  closed_at: string;
+  reopened_by: number | null;
+  reopened_at: string | null;
+}
+
 declare global {
   namespace Express {
     interface Request {

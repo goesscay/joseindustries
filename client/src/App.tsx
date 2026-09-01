@@ -27,6 +27,7 @@ import { BankReconciliationPage } from "./pages/BankReconciliationPage";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccountsPage";
 import { JournalEntriesPage } from "./pages/JournalEntriesPage";
 import { FixedAssetsPage } from "./pages/FixedAssetsPage";
+import { YearEndClosingPage } from "./pages/YearEndClosingPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { GstReturnsPage } from "./pages/GstReturnsPage";
 import { StockLevelsPage, StockLedgerPage, OpeningStockPage, StockAdjustmentsPage, InventoryValuationPage } from "./pages/InventoryPage";
@@ -149,6 +150,14 @@ function App() {
             element={
               <ModuleGate module="accounting.fixed_assets">
                 <FixedAssetsPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/accounting/year-end-closing"
+            element={
+              <ModuleGate module="accounting.year_end_closing">
+                <YearEndClosingPage />
               </ModuleGate>
             }
           />

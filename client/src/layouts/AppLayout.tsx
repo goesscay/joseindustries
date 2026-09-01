@@ -52,6 +52,7 @@ import {
   BookOutlined,
   UnorderedListOutlined,
   ToolOutlined,
+  LockOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { ROUTE_MODULE } from "../constants/routeModules";
@@ -174,6 +175,7 @@ export function AppLayout() {
                 { key: "/accounting/chart-of-accounts", icon: <BookOutlined />, label: "Chart of Accounts" },
                 { key: "/accounting/journals", icon: <FileTextOutlined />, label: "Journal Entries" },
                 { key: "/accounting/fixed-assets", icon: <ToolOutlined />, label: "Fixed Assets" },
+                { key: "/accounting/year-end-closing", icon: <LockOutlined />, label: "Year-End Closing" },
               ],
             },
             {

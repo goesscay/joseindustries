@@ -30,6 +30,7 @@ export const ROUTE_MODULE: Record<string, string> = {
   "/accounting/chart-of-accounts": "accounting.chart_of_accounts",
   "/accounting/journals": "accounting.journals",
   "/accounting/fixed-assets": "accounting.fixed_assets",
+  "/accounting/year-end-closing": "accounting.year_end_closing",
   "/customers": "contacts.customers",
   "/vendors": "contacts.vendors",
   "/items": "items.items",

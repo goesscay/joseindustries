@@ -981,3 +981,28 @@ export interface DepreciationRunResult {
   posted: { assetId: number; assetName: string; amount: number; journalId: number }[];
   skipped: { assetId: number; assetName: string; reason: string }[];
 }
+
+// ---- Double-entry rollout, Phase G: Year-End Closing / Period Lock ----
+
+export type FinancialYearClosingStatus = "closed" | "reopened";
+
+export interface FinancialYearClosing {
+  id: number;
+  company_id: number;
+  financial_year: string;
+  start_date: string;
+  end_date: string;
+  status: FinancialYearClosingStatus;
+  net_profit: string;
+  closing_journal_id: number | null;
+  closed_by: number | null;
+  closed_at: string;
+  reopened_by: number | null;
+  reopened_at: string | null;
+}
+
+export interface FinancialYearClosingStatusInfo {
+  latestClosedFinancialYear: string | null;
+  lockedThroughDate: string | null;
+  suggestedFinancialYear: string;
+}

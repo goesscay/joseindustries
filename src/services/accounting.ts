@@ -246,6 +246,41 @@ async function getJournalLinesConn(conn: PoolConnection, journalId: number): Pro
 }
 
 /**
+ * Phase G: the date (inclusive) through which a company's books are locked
+ * - everything on or before this date has been swept into a closed
+ * financial year and can no longer be posted to or reversed. `null` means
+ * nothing has ever been closed for this company yet. Always the single
+ * most-recently-closed row's end_date - `status = 'reopened'` rows are
+ * excluded, so reopening a FY correctly retreats this boundary back to
+ * whatever was closed before it (see schema.sql's comment on
+ * financial_year_closings for why this is always unambiguous).
+ *
+ * Takes the same connection the caller is already using (never a fresh pool
+ * connection) so this sees that transaction's own not-yet-committed writes
+ * - load-bearing for both the closing route (which must NOT see its own FY
+ * as locked while posting the very journal that closes it - it inserts the
+ * financial_year_closings row only AFTER that journal posts, so this is
+ * naturally fine) and the reopen route (which flips the row to 'reopened'
+ * *before* reversing its closing journal, on the same connection, so this
+ * function immediately stops reporting that FY as locked and the reversal
+ * isn't blocked by the very closure it's undoing).
+ */
+async function getLockedThroughDate(companyId: number, conn: PoolConnection): Promise<string | null> {
+  // DATE_FORMAT forces a plain "YYYY-MM-DD" string back - mysql2 otherwise
+  // returns a DATE column as a native JS Date object by default, and a bare
+  // `someDateString <= thatDateObject` comparison silently coerces the
+  // STRING side via ToNumber (giving NaN, so the comparison is always
+  // false) rather than comparing calendar dates at all. Every date value
+  // compared in JS anywhere in this Phase G lock logic goes through this
+  // same DATE_FORMAT treatment for exactly that reason.
+  const [rows] = await conn.query<any[]>(
+    "SELECT DATE_FORMAT(end_date, '%Y-%m-%d') as end_date FROM financial_year_closings WHERE company_id = ? AND status = 'closed' ORDER BY end_date DESC LIMIT 1",
+    [companyId]
+  );
+  return rows[0]?.end_date ?? null;
+}
+
+/**
  * Core validate-and-insert logic shared by createJournal() and
  * createJournalTx() - assumes `conn` is already inside a transaction that
  * the caller owns (begins/commits/rolls back/releases). Beyond
@@ -255,9 +290,17 @@ async function getJournalLinesConn(conn: PoolConnection, journalId: number): Pro
  *     (never silently cross-posts between Jose Enterprises and Jose
  *     Industries' books)
  *   - every line's account is active (not soft-deleted/deactivated)
+ *   - (Phase G) the journal's own date isn't within a closed financial year
  */
 async function insertJournalRows(conn: PoolConnection, input: CreateJournalInput): Promise<Journal> {
   validateJournalLines(input.lines);
+
+  const lockedThrough = await getLockedThroughDate(input.company_id, conn);
+  if (lockedThrough && input.journal_date <= lockedThrough) {
+    throw new AccountingError(
+      `${input.journal_date} falls within a closed financial year (locked through ${lockedThrough}) - reopen that financial year first if this posting is genuinely needed`
+    );
+  }
 
   const accountIds = [...new Set(input.lines.map((l) => l.account_id))];
   const [accountRows] = await conn.query<any[]>(
@@ -338,6 +381,30 @@ async function insertReversalRows(conn: PoolConnection, journalId: number, userI
     throw new AccountingError(
       "This entry has already been matched in a bank reconciliation and can't be reversed. Reopen the reconciliation first."
     );
+  }
+  // Phase G: same centralization as the reconciliation guard just above -
+  // checked against the ORIGINAL journal's own date (never today's date,
+  // which is what the reversal itself will be posted under) so a
+  // transaction dated inside a closed financial year can't be reversed out
+  // from under it, even though the reversal entry lands in today's open
+  // period.
+  const lockedThrough = await getLockedThroughDate(original.company_id, conn);
+  if (lockedThrough) {
+    // Same DATE_FORMAT-to-string treatment as getLockedThroughDate itself -
+    // `original.journal_date` (from the plain `SELECT *` in
+    // getJournalByIdConn) is a native JS Date object, not a string, and
+    // comparing it directly against `lockedThrough` would silently coerce
+    // wrong (see getLockedThroughDate's own comment).
+    const [dateRows] = await conn.query<any[]>(
+      "SELECT DATE_FORMAT(journal_date, '%Y-%m-%d') as journal_date FROM journals WHERE id = ?",
+      [journalId]
+    );
+    const originalDate: string = dateRows[0].journal_date;
+    if (originalDate <= lockedThrough) {
+      throw new AccountingError(
+        `This entry is dated ${originalDate}, within a closed financial year (locked through ${lockedThrough}), and can't be reversed. Reopen that financial year first.`
+      );
+    }
   }
 
   const lines = await getJournalLinesConn(conn, journalId);
@@ -1594,6 +1661,73 @@ export async function postFixedAssetDisposalJournalTx(
     reference: null,
     source_type: "fixed_asset_disposal",
     source_id: input.fixedAssetId,
+    description,
+    created_by: input.createdBy,
+    lines,
+  });
+}
+
+// ---- Double-entry rollout, Phase G: Year-End Closing. ----
+
+export interface YearEndClosingLine {
+  accountId: number;
+  amount: number;
+}
+
+export interface PostYearEndClosingJournalInput {
+  companyId: number;
+  endDate: string;
+  financialYear: string;
+  incomeLines: YearEndClosingLine[];
+  expenseLines: YearEndClosingLine[];
+  netProfit: number;
+  createdBy: number | null;
+}
+
+/**
+ * Zeroes every Revenue/Expense account's activity for the financial year
+ * being closed into Retained Earnings: Dr each income account for its
+ * period credit balance (income rows from getProfitAndLoss are
+ * Credit - Debit, so debiting by that amount brings its net-since-inception
+ * contribution for this period down to zero), Cr each expense account for
+ * its period debit balance (the mirror image), and a single balancing line
+ * to Retained Earnings for whatever's left over:
+ *   netProfit = totalIncome - totalExpenses
+ * A profit (netProfit > 0) credits Retained Earnings (increasing a
+ * credit-normal equity account, correctly); a loss debits it. Exactly
+ * netProfit === 0 needs no balancing line at all - the income/expense lines
+ * alone already balance in that case. Only called with at least one income
+ * or expense line (see financialYearClosings.ts's route - a FY with zero
+ * activity skips posting a journal entirely rather than calling this with
+ * nothing to zero).
+ */
+export async function postYearEndClosingJournalTx(
+  conn: PoolConnection,
+  input: PostYearEndClosingJournalInput
+): Promise<Journal> {
+  const description = `Year-End Closing: FY ${input.financialYear}`;
+  const lines: JournalLineInput[] = [
+    ...input.incomeLines.map((l) => ({ account_id: l.accountId, debit: round2(l.amount), credit: 0, description })),
+    ...input.expenseLines.map((l) => ({ account_id: l.accountId, debit: 0, credit: round2(l.amount), description })),
+  ];
+
+  const netProfit = round2(input.netProfit);
+  if (netProfit !== 0) {
+    const retainedEarningsId = await getSystemAccountByCategory(input.companyId, "Retained Earnings");
+    if (!retainedEarningsId) throw new AccountingError("This company has no Retained Earnings account configured");
+    if (netProfit > 0) {
+      lines.push({ account_id: retainedEarningsId, debit: 0, credit: netProfit, description: `${description} (net profit)` });
+    } else {
+      lines.push({ account_id: retainedEarningsId, debit: -netProfit, credit: 0, description: `${description} (net loss)` });
+    }
+  }
+
+  return createJournalTx(conn, {
+    company_id: input.companyId,
+    journal_date: input.endDate,
+    reference: null,
+    source_type: "year_end_closing",
+    source_id: null,
     description,
     created_by: input.createdBy,
     lines,

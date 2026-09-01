@@ -1340,3 +1340,63 @@ CREATE TABLE IF NOT EXISTS fixed_asset_depreciation_entries (
   FOREIGN KEY (fixed_asset_id) REFERENCES fixed_assets(id),
   FOREIGN KEY (created_by) REFERENCES users(id)
 );
+
+-- ============================================================================
+-- Double-entry rollout, Phase G: Year-End Closing / Period Lock. One row per
+-- (company, financial_year) ever closed - a financial year is closed by
+-- posting ONE journal that zeroes every Revenue/Expense account's activity
+-- for that FY into Retained Earnings (Dr each Revenue account for its
+-- period credit balance, Cr each Expense account for its period debit
+-- balance, and a balancing Cr/Dr Retained Earnings for the net profit/
+-- loss), then recording this row. See src/routes/financialYearClosings.ts
+-- for the full closing/reopening logic and src/services/accounting.ts's
+-- getLockedThroughDate for how this row's existence actually blocks new
+-- postings.
+--
+-- Design:
+-- - Financial years must be closed in strict chronological order with no
+--   gaps: a FY may only be closed if no LATER FY for this company is
+--   already closed, and (once any FY has ever been closed) the FY being
+--   closed must start the day after the latest closed FY's end_date - see
+--   financialYearClosings.ts's own comment for the full ordering rule. This
+--   guarantees "the end_date of the single most-recently-closed row" is
+--   always an unambiguous, gapless lock boundary with no need to scan or
+--   reconcile multiple rows.
+-- - `status = 'reopened'` (not a DELETE) is how an undo is recorded - closed
+--   is reversible, but the fact that it WAS closed and later reopened stays
+--   in the audit trail forever, same philosophy as journals.status =
+--   'reversed' never deleting the original row. Only the single most
+--   recently closed FY may ever be reopened (LIFO) - reopening an older one
+--   first would retroactively unlock a period a LATER closing already
+--   depended on being settled.
+-- - `uniq_company_fy` means re-closing a previously reopened FY is an UPDATE
+--   of this same row (fresh closing_journal_id/net_profit/closed_by/
+--   closed_at, status back to 'closed'), never a second INSERT - a FY has
+--   exactly one closing record, whatever its current state.
+-- - closing_journal_id is nullable: a FY with zero Revenue/Expense activity
+--   still gets closed (and still locks its period against back-dated
+--   entries) with no journal to post at all - validateJournalLines requires
+--   at least two lines, so an empty period simply skips posting one.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS financial_year_closings (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  financial_year VARCHAR(10) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  status ENUM('closed', 'reopened') NOT NULL DEFAULT 'closed',
+  net_profit DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  closing_journal_id INT UNSIGNED NULL,
+  closed_by INT UNSIGNED NULL,
+  closed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reopened_by INT UNSIGNED NULL,
+  reopened_at TIMESTAMP NULL,
+  UNIQUE KEY uniq_company_fy (company_id, financial_year),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (closing_journal_id) REFERENCES journals(id),
+  FOREIGN KEY (closed_by) REFERENCES users(id),
+  FOREIGN KEY (reopened_by) REFERENCES users(id)
+);
+
+ALTER TABLE financial_year_closings ADD INDEX IF NOT EXISTS idx_fy_closings_company_status (company_id, status, end_date);
