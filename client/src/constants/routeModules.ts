@@ -45,6 +45,7 @@ export const ROUTE_MODULE: Record<string, string> = {
   "/settings/tax-rates": "settings.tax_gst",
   "/settings/document-numbering": "settings.document_numbering",
   "/settings/payment-terms": "settings.payment_terms",
+  "/settings/document-templates": "settings.document_templates",
   "/settings/terms-conditions": "settings.terms_conditions",
 };
 

@@ -6,6 +6,7 @@ import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { streamReceiptPdf } from "../services/pdf/receiptPdf";
+import { getEffectiveDocumentTemplate } from "../services/documentTemplates";
 import { AccountingError, getJournalBySource, postReceiptJournalTx, reverseJournalTx } from "../services/accounting";
 import { Company, Customer, DocumentRecord, Journal, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation, Role } from "../types";
 
@@ -518,7 +519,12 @@ receiptsRouter.get(
     const [companyRows] = await pool.query<any[]>("SELECT * FROM companies WHERE id = ?", [receipt.company_id]);
     const [customerRows] = await pool.query<any[]>("SELECT * FROM customers WHERE id = ?", [receipt.customer_id]);
     const allocations = await findAllocations(receipt.id);
+    const template = await getEffectiveDocumentTemplate(receipt.company_id, "receipt", {
+      accentColor: "#16A34A",
+      headerLabel: null,
+      footerNote: "This is a computer-generated receipt.",
+    });
 
-    streamReceiptPdf(res, receipt, customerRows[0] as Customer, companyRows[0] as Company, allocations);
+    streamReceiptPdf(res, receipt, customerRows[0] as Customer, companyRows[0] as Company, allocations, template);
   })
 );

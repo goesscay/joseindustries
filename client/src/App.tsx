@@ -35,6 +35,7 @@ import { TaxRatesPage } from "./pages/TaxRatesPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { DocumentNumberingPage } from "./pages/DocumentNumberingPage";
 import { TermsConditionsPage } from "./pages/TermsConditionsPage";
+import { DocumentTemplatesPage } from "./pages/DocumentTemplatesPage";
 
 function App() {
   return (
@@ -178,6 +179,14 @@ function App() {
             element={
               <ModuleGate module="settings.document_numbering">
                 <DocumentNumberingPage />
+              </ModuleGate>
+            }
+          />
+          <Route
+            path="/settings/document-templates"
+            element={
+              <ModuleGate module="settings.document_templates">
+                <DocumentTemplatesPage />
               </ModuleGate>
             }
           />

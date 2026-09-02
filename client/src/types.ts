@@ -1032,3 +1032,27 @@ export interface FinancialYearClosingStatusInfo {
   lockedThroughDate: string | null;
   suggestedFinancialYear: string;
 }
+
+// ---- Document Templates ----
+
+export interface DocumentTemplate {
+  /** null when this (company, doc_type) has never been customized - see
+   * documentTemplates.ts's list route, which always returns every
+   * combination merged with defaults, row or not. */
+  id: number | null;
+  company_id: number;
+  doc_type: string;
+  show_logo: boolean | number;
+  show_bank_details: boolean | number;
+  show_signature_block: boolean | number;
+  accent_color: string | null;
+  header_label: string | null;
+  footer_note: string | null;
+  updated_by: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** Only present on the list endpoint - see documentTemplates.ts's list query. */
+  company_name?: string;
+  company_code?: string;
+  has_pdf?: boolean;
+}

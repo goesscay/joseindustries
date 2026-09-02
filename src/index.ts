@@ -38,6 +38,7 @@ import { taxRatesRouter } from "./routes/taxRates";
 import { paymentTermsRouter } from "./routes/paymentTerms";
 import { termsTemplatesRouter } from "./routes/termsTemplates";
 import { docCountersRouter } from "./routes/docCounters";
+import { documentTemplatesRouter } from "./routes/documentTemplates";
 import { dashboardRouter } from "./routes/dashboard";
 
 dotenv.config();
@@ -86,6 +87,7 @@ app.use("/api/tax-rates", taxRatesRouter);
 app.use("/api/payment-terms", paymentTermsRouter);
 app.use("/api/terms-templates", termsTemplatesRouter);
 app.use("/api/doc-counters", docCountersRouter);
+app.use("/api/document-templates", documentTemplatesRouter);
 app.use("/api/dashboard", dashboardRouter);
 
 app.use(express.static(clientDistPath));

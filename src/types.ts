@@ -736,6 +736,27 @@ export interface FinancialYearClosing {
   reopened_at: string | null;
 }
 
+// ---- Document Templates - see schema.sql's comment on document_templates
+// for the full design. ----
+
+export interface DocumentTemplate {
+  /** null when this (company, doc_type) has never been customized - see
+   * documentTemplates.ts's list route, which always returns every
+   * combination merged with defaults, row or not. */
+  id: number | null;
+  company_id: number;
+  doc_type: string;
+  show_logo: boolean | number;
+  show_bank_details: boolean | number;
+  show_signature_block: boolean | number;
+  accent_color: string | null;
+  header_label: string | null;
+  footer_note: string | null;
+  updated_by: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 declare global {
   namespace Express {
     interface Request {

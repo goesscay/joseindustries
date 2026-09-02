@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import { Response } from "express";
 import { Company, Customer, Receipt, ReceiptAllocation, PaymentMode } from "../../types";
 import { amountInWords } from "../../utils/numberToWords";
+import { EffectiveDocumentTemplate } from "../documentTemplates";
 
 const PAGE_MARGIN = 40;
 const PAGE_WIDTH = 595.28; // A4
@@ -12,7 +13,11 @@ const CONTENT_WIDTH = CONTENT_RIGHT - CONTENT_LEFT;
 
 const LOGO_PATH = path.join(__dirname, "../../../client/src/assets/logo-black.png");
 
-const GREEN = "#16A34A";
+// This file's own built-in look, used whenever the 'receipt' doc_type has
+// no Document Templates row for this company - see
+// getEffectiveDocumentTemplate's own doc comment. Only the accent green is
+// themeable; DARK/GRAY/MUTED/BORDER are neutral ink/paper shades, not part
+// of the accent, and stay fixed regardless of template settings.
 const DARK = "#111111";
 const GRAY = "#444444";
 const MUTED = "#888888";
@@ -49,21 +54,27 @@ export function streamReceiptPdf(
   receipt: Receipt,
   customer: Customer,
   company: Company,
-  allocations: ReceiptAllocation[]
+  allocations: ReceiptAllocation[],
+  template: EffectiveDocumentTemplate
 ) {
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN });
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${receipt.receipt_no.replace(/\//g, "-")}.pdf"`);
   doc.pipe(res);
 
+  const GREEN = template.accentColor;
   const logoSize = 44;
-  try {
-    doc.image(LOGO_PATH, CONTENT_LEFT, PAGE_MARGIN, { fit: [logoSize, logoSize] });
-  } catch {
-    // Logo missing - skip silently.
+  if (template.showLogo) {
+    try {
+      doc.image(LOGO_PATH, CONTENT_LEFT, PAGE_MARGIN, { fit: [logoSize, logoSize] });
+    } catch {
+      // Logo missing - skip silently.
+    }
   }
 
-  const textX = CONTENT_LEFT + logoSize + 10;
+  // show_logo=false hides only the icon graphic, not the company name text
+  // next to it - see documentPdf.ts's drawBrandmark for the same choice.
+  const textX = CONTENT_LEFT + (template.showLogo ? logoSize + 10 : 0);
   const textWidth = 260;
   doc.fontSize(15).fillColor(GREEN).text(company.name.toUpperCase(), textX, PAGE_MARGIN, { width: textWidth });
   doc.fontSize(8).fillColor(GRAY);
@@ -79,6 +90,10 @@ export function streamReceiptPdf(
   doc.fontSize(9).fillColor(GRAY);
   doc.text(`No: ${receipt.receipt_no}`, rightX, doc.y + 4, { width: rightWidth, align: "right" });
   doc.text(`Date: ${formatDate(receipt.received_date)}`, rightX, doc.y, { width: rightWidth, align: "right" });
+  if (template.headerLabel) {
+    doc.font("Helvetica-Oblique").fontSize(8).fillColor(MUTED).text(template.headerLabel, rightX, doc.y + 2, { width: rightWidth, align: "right" });
+    doc.font("Helvetica");
+  }
 
   let y = Math.max(doc.y, PAGE_MARGIN + logoSize) + 12;
   doc.moveTo(CONTENT_LEFT, y).lineTo(CONTENT_RIGHT, y).strokeColor(BORDER).stroke();
@@ -141,16 +156,18 @@ export function streamReceiptPdf(
   }
 
   y += 40;
-  const sigColWidth = CONTENT_WIDTH / 2 - 8;
-  const sigX = CONTENT_LEFT + CONTENT_WIDTH / 2 + 8;
-  doc.fontSize(8).fillColor(GRAY).text(`For ${company.name}`, sigX, y, { width: sigColWidth, align: "center" });
-  doc.text(" ", sigX, y + 30);
-  doc.fontSize(8).fillColor(GRAY).text("Authorised Signatory", sigX, doc.y, { width: sigColWidth, align: "center" });
+  if (template.showSignatureBlock) {
+    const sigColWidth = CONTENT_WIDTH / 2 - 8;
+    const sigX = CONTENT_LEFT + CONTENT_WIDTH / 2 + 8;
+    doc.fontSize(8).fillColor(GRAY).text(`For ${company.name}`, sigX, y, { width: sigColWidth, align: "center" });
+    doc.text(" ", sigX, y + 30);
+    doc.fontSize(8).fillColor(GRAY).text("Authorised Signatory", sigX, doc.y, { width: sigColWidth, align: "center" });
+  }
 
   doc
     .fontSize(7)
     .fillColor(MUTED)
-    .text("This is a computer-generated receipt.", CONTENT_LEFT, y + 60, { width: CONTENT_WIDTH, align: "center" });
+    .text(template.footerNote, CONTENT_LEFT, y + 60, { width: CONTENT_WIDTH, align: "center" });
 
   doc.end();
 }

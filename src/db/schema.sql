@@ -1447,3 +1447,45 @@ SELECT r.id, r.tax_invoice_id, r.amount
 FROM receipts r
 WHERE r.tax_invoice_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM receipt_allocations ra WHERE ra.receipt_id = r.id);
+
+-- ============================================================================
+-- Document Templates - the "Invoice Templates" settings placeholder,
+-- renamed and implemented as "Document Templates" since it now covers every
+-- printed document type, not just the Tax Invoice: quotation,
+-- proforma_invoice, delivery_challan, tax_invoice, purchase_order,
+-- purchase_bill, credit_note, debit_note, receipt (see
+-- src/services/documentTemplates.ts's TEMPLATE_DOC_TYPES - the same
+-- "widen beyond documents.doc_type's own ENUM" reasoning
+-- src/services/numbering.ts's SeriesType already uses, since half these
+-- types live in their own dedicated tables, not `documents`).
+--
+-- One row per (company, doc_type) - a company's two books (Jose Enterprises/
+-- Jose Industries) can carry different branding/footer text per document
+-- type. A doc_type with NO row for a company uses this app's existing
+-- built-in look untouched - every field here is an OVERRIDE, resolved by
+-- src/services/documentTemplates.ts's getEffectiveDocumentTemplate, never a
+-- replacement scheme - so a company that never opens this settings page
+-- gets byte-for-byte the same PDFs it always has. Purchase Order/Purchase
+-- Bill/Credit Note/Debit Note have no PDF export at all yet (a separate,
+-- larger, unimplemented feature) - their rows here are still fully
+-- editable, ready for whenever that's built, rather than being withheld
+-- just because nothing reads them yet.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS document_templates (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  doc_type VARCHAR(30) NOT NULL,
+  show_logo BOOLEAN NOT NULL DEFAULT TRUE,
+  show_bank_details BOOLEAN NOT NULL DEFAULT TRUE,
+  show_signature_block BOOLEAN NOT NULL DEFAULT TRUE,
+  accent_color VARCHAR(7) NULL,
+  header_label VARCHAR(100) NULL,
+  footer_note VARCHAR(255) NULL,
+  updated_by INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_company_doctype (company_id, doc_type),
+  FOREIGN KEY (company_id) REFERENCES companies(id),
+  FOREIGN KEY (updated_by) REFERENCES users(id)
+);

@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import { Response } from "express";
 import { Company, Customer, DocumentItem, DocumentRecord } from "../../types";
 import { amountInWords } from "../../utils/numberToWords";
+import { EffectiveDocumentTemplate } from "../documentTemplates";
 
 const PAGE_MARGIN = 40;
 const PAGE_WIDTH = 595.28; // A4
@@ -17,8 +18,12 @@ const LOGO_NATURAL_WIDTH = 493;
 const LOGO_NATURAL_HEIGHT = 125;
 const LOGO_ICON_FRACTION = 0.4; // approx. share of the artwork occupied by the icon mark, left of the wordmark
 
-const GREEN = "#1B7A4D";
-const DARK_GREEN = "#155D3C";
+// This file's own built-in look, used whenever a (company, doc_type) has no
+// Document Templates row (the overwhelmingly common case) - see
+// getEffectiveDocumentTemplate's own doc comment. Only the accent green is
+// themeable; DARK/GRAY/MUTED/BORDER/LIGHT_BG are neutral ink/paper shades,
+// not part of the accent, and stay fixed regardless of template settings.
+const DEFAULT_ACCENT = "#1B7A4D";
 const DARK = "#181818";
 const GRAY = "#4b4b4b";
 const MUTED = "#8a8a8a";
@@ -40,6 +45,19 @@ function formatMoney(n: number): string {
 
 function formatRupees(n: number): string {
   return `Rs. ${formatMoney(n)}`;
+}
+
+/** A ~18% darker shade of a hex color, for the table header background -
+ * derived from whatever accent color is in effect (custom or built-in)
+ * rather than being its own separate configurable field, so a customized
+ * accent always gets a consistent, automatically-matching darker tone. */
+function darkenHex(hex: string, amount = 0.18): string {
+  const n = parseInt(hex.slice(1), 16);
+  const clamp = (c: number) => Math.max(0, Math.min(255, Math.round(c * (1 - amount))));
+  const r = clamp((n >> 16) & 255);
+  const g = clamp((n >> 8) & 255);
+  const b = clamp(n & 255);
+  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
 }
 
 const TABLE_COLS = (() => {
@@ -81,7 +99,8 @@ export function streamDocumentPdf(
   document: DocumentRecord,
   items: DocumentItem[],
   customer: Customer,
-  company: Company
+  company: Company,
+  template: EffectiveDocumentTemplate
 ) {
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN, bufferPages: true });
   res.setHeader("Content-Type", "application/pdf");
@@ -91,7 +110,8 @@ export function streamDocumentPdf(
   const state = { y: PAGE_MARGIN, page: 1 };
   const titleLower = title.toLowerCase();
   const titleUpper = title.toUpperCase();
-  const isTaxInvoice = document.doc_type === "tax_invoice";
+  const GREEN = template.accentColor;
+  const DARK_GREEN = darkenHex(GREEN);
 
   const subtotal = Number(document.subtotal);
   const discountAmount = Number(document.discount_amount);
@@ -106,14 +126,20 @@ export function streamDocumentPdf(
 
   function drawBrandmark(x: number, y: number, height: number): number {
     const scale = height / LOGO_NATURAL_HEIGHT;
-    const iconWidth = LOGO_ICON_FRACTION * LOGO_NATURAL_WIDTH * scale;
-    try {
-      doc.save();
-      doc.rect(x, y, iconWidth, height).clip();
-      doc.image(LOGO_PATH, x, y, { height });
-      doc.restore();
-    } catch {
-      // Logo missing - skip silently rather than fail PDF generation.
+    // show_logo=false hides only the icon graphic, not the company name
+    // text next to it - dropping the company's own name off its printed
+    // documents entirely is never a sensible default, so this reserves no
+    // icon width at all rather than leaving a blank gap.
+    const iconWidth = template.showLogo ? LOGO_ICON_FRACTION * LOGO_NATURAL_WIDTH * scale : 0;
+    if (template.showLogo) {
+      try {
+        doc.save();
+        doc.rect(x, y, iconWidth, height).clip();
+        doc.image(LOGO_PATH, x, y, { height });
+        doc.restore();
+      } catch {
+        // Logo missing - skip silently rather than fail PDF generation.
+      }
     }
 
     const words = company.name.trim().split(/\s+/);
@@ -148,9 +174,9 @@ export function streamDocumentPdf(
     const rightWidth = 260;
     const rightX = CONTENT_RIGHT - rightWidth;
     doc.font("Times-Bold").fontSize(20).fillColor(DARK).text(titleUpper, rightX, PAGE_MARGIN, { width: rightWidth, align: "right" });
-    if (isTaxInvoice) {
+    if (template.headerLabel) {
       doc.font("Helvetica-Oblique").fontSize(8.5).fillColor(MUTED);
-      doc.text("Original for Recipient", rightX, doc.y + 2, { width: rightWidth, align: "right" });
+      doc.text(template.headerLabel, rightX, doc.y + 2, { width: rightWidth, align: "right" });
     }
     doc.font("Helvetica");
 
@@ -397,16 +423,18 @@ export function streamDocumentPdf(
   const footerColWidth = CONTENT_WIDTH / 2 - 10;
   const paymentLabelWidth = footerColWidth * 0.4;
   const paymentValueWidth = footerColWidth * 0.6;
-  const paymentRows: [string, string][] = (
-    [
-      ["Account Name", company.name],
-      ["Bank Name", company.bank_name],
-      ["Account No.", company.bank_account_no],
-      ["IFSC Code", company.bank_ifsc],
-      ["Payment Terms", document.mode_terms_of_payment],
-      ["Credit Period", document.credit_period],
-    ] as [string, string | null][]
-  ).filter(([, value]) => value) as [string, string][];
+  const paymentRows: [string, string][] = template.showBankDetails
+    ? ((
+        [
+          ["Account Name", company.name],
+          ["Bank Name", company.bank_name],
+          ["Account No.", company.bank_account_no],
+          ["IFSC Code", company.bank_ifsc],
+          ["Payment Terms", document.mode_terms_of_payment],
+          ["Credit Period", document.credit_period],
+        ] as [string, string | null][]
+      ).filter(([, value]) => value) as [string, string][])
+    : [];
 
   let paymentSectionHeight = 16; // header line + gap, matches the render pass below
   for (const [label, value] of paymentRows) {
@@ -422,7 +450,7 @@ export function streamDocumentPdf(
   });
   doc.font("Helvetica");
 
-  const ackSectionHeight = 62;
+  const ackSectionHeight = template.showSignatureBlock ? 62 : 0;
 
   const estimatedFooterHeight =
     totalsBlockHeight + 12 + wordsHeight + 14 + Math.max(paymentSectionHeight, termsSectionHeight) + 16 + ackSectionHeight;
@@ -484,20 +512,23 @@ export function streamDocumentPdf(
   const sectionTop = state.y;
   const paymentValueX = CONTENT_LEFT + paymentLabelWidth;
 
-  doc.fontSize(8.5).fillColor(GREEN).font("Helvetica-Bold").text("PAYMENT / BANK DETAILS", CONTENT_LEFT, sectionTop, {
-    characterSpacing: 1.2,
-  });
-  let py = doc.y + 6;
-  for (const [label, value] of paymentRows) {
-    doc.fontSize(8.3).fillColor(MUTED).font("Helvetica").text(label, CONTENT_LEFT, py, { width: paymentLabelWidth });
-    const labelBottom = doc.y;
-    doc.fontSize(8.3).fillColor(DARK).font("Helvetica-Bold").text(value, paymentValueX, py, {
-      width: paymentValueWidth,
-      align: "right",
+  let paymentBottom = sectionTop;
+  if (template.showBankDetails) {
+    doc.fontSize(8.5).fillColor(GREEN).font("Helvetica-Bold").text("PAYMENT / BANK DETAILS", CONTENT_LEFT, sectionTop, {
+      characterSpacing: 1.2,
     });
-    py = Math.max(labelBottom, doc.y) + 4;
+    let py = doc.y + 6;
+    for (const [label, value] of paymentRows) {
+      doc.fontSize(8.3).fillColor(MUTED).font("Helvetica").text(label, CONTENT_LEFT, py, { width: paymentLabelWidth });
+      const labelBottom = doc.y;
+      doc.fontSize(8.3).fillColor(DARK).font("Helvetica-Bold").text(value, paymentValueX, py, {
+        width: paymentValueWidth,
+        align: "right",
+      });
+      py = Math.max(labelBottom, doc.y) + 4;
+    }
+    paymentBottom = py;
   }
-  const paymentBottom = py;
 
   const rightX = CONTENT_LEFT + CONTENT_WIDTH / 2 + 10;
   doc.fontSize(8.5).fillColor(GREEN).font("Helvetica-Bold").text("TERMS & CONDITIONS", rightX, sectionTop, {
@@ -514,24 +545,26 @@ export function streamDocumentPdf(
   state.y = Math.max(paymentBottom, termsBottom) + 16;
 
   // ---- Acknowledgement + signature ----
-  doc.font("Helvetica");
-  const ackY = state.y;
-  doc.fontSize(8.5).fillColor(DARK).font("Helvetica-Bold").text("Customer Acknowledgement", CONTENT_LEFT, ackY);
-  doc.fontSize(8).fillColor(GRAY).font("Helvetica").text("Received the above goods in good condition.", CONTENT_LEFT, doc.y + 2);
-  doc.text("Name: ______________________     Date: ____________", CONTENT_LEFT, doc.y + 20);
+  if (template.showSignatureBlock) {
+    doc.font("Helvetica");
+    const ackY = state.y;
+    doc.fontSize(8.5).fillColor(DARK).font("Helvetica-Bold").text("Customer Acknowledgement", CONTENT_LEFT, ackY);
+    doc.fontSize(8).fillColor(GRAY).font("Helvetica").text("Received the above goods in good condition.", CONTENT_LEFT, doc.y + 2);
+    doc.text("Name: ______________________     Date: ____________", CONTENT_LEFT, doc.y + 20);
 
-  const sigX = CONTENT_LEFT + CONTENT_WIDTH / 2 + 10;
-  const sigColWidth = CONTENT_WIDTH / 2 - 10;
-  doc.fontSize(8.5).fillColor(DARK).font("Helvetica-Bold").text(`For ${company.name}`, sigX, ackY, {
-    width: sigColWidth,
-    align: "right",
-  });
-  doc.fontSize(8).fillColor(GRAY).font("Helvetica").text("Authorised Signatory (Seal / Signature)", sigX, ackY + 44, {
-    width: sigColWidth,
-    align: "right",
-  });
+    const sigX = CONTENT_LEFT + CONTENT_WIDTH / 2 + 10;
+    const sigColWidth = CONTENT_WIDTH / 2 - 10;
+    doc.fontSize(8.5).fillColor(DARK).font("Helvetica-Bold").text(`For ${company.name}`, sigX, ackY, {
+      width: sigColWidth,
+      align: "right",
+    });
+    doc.fontSize(8).fillColor(GRAY).font("Helvetica").text("Authorised Signatory (Seal / Signature)", sigX, ackY + 44, {
+      width: sigColWidth,
+      align: "right",
+    });
 
-  state.y = Math.max(doc.y, ackY + 60) + 4;
+    state.y = Math.max(doc.y, ackY + 60) + 4;
+  }
 
   // ---- Per-page footer note + page numbers ----
   // Writing this close to the bottom edge sits right on pdfkit's own margin
@@ -552,7 +585,7 @@ export function streamDocumentPdf(
       footerY,
       { width: CONTENT_WIDTH / 2 }
     );
-    doc.text(`This is a computer-generated ${titleLower}.   Page ${i + 1} of ${pageRange.count}`, CONTENT_LEFT + CONTENT_WIDTH / 2, footerY, {
+    doc.text(`${template.footerNote}   Page ${i + 1} of ${pageRange.count}`, CONTENT_LEFT + CONTENT_WIDTH / 2, footerY, {
       width: CONTENT_WIDTH / 2,
       align: "right",
     });

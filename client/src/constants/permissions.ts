@@ -54,6 +54,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   { key: "settings.tax_gst", label: "Tax & GST", group: "Settings" },
   { key: "settings.document_numbering", label: "Document Numbering", group: "Settings" },
   { key: "settings.payment_terms", label: "Payment Terms", group: "Settings" },
+  { key: "settings.document_templates", label: "Document Templates", group: "Settings" },
   { key: "settings.terms_conditions", label: "Terms & Conditions", group: "Settings" },
 ];
 

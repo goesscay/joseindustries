@@ -216,7 +216,7 @@ export function AppLayout() {
                 { key: "/settings/financial-year", icon: <CalendarOutlined />, label: comingSoonLabel("Financial Year"), disabled: true },
                 { key: "/settings/document-numbering", icon: <NumberOutlined />, label: "Document Numbering" },
                 { key: "/settings/payment-terms", icon: <FileProtectOutlined />, label: "Payment Terms" },
-                { key: "/settings/invoice-templates", icon: <LayoutOutlined />, label: comingSoonLabel("Invoice Templates"), disabled: true },
+                { key: "/settings/document-templates", icon: <LayoutOutlined />, label: "Document Templates" },
                 { key: "/settings/terms-conditions", icon: <SafetyOutlined />, label: "Terms & Conditions" },
                 { key: "/settings/notifications", icon: <BellOutlined />, label: comingSoonLabel("Notifications"), disabled: true },
               ],

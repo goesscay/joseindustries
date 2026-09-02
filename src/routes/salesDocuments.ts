@@ -7,6 +7,7 @@ import { getNextDocNumber } from "../services/numbering";
 import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
+import { getEffectiveDocumentTemplate, TemplateDocType } from "../services/documentTemplates";
 import {
   AccountingError,
   getJournalBySource,
@@ -835,6 +836,16 @@ export function createSalesDocumentRouter(
       const company = companyRows[0] as Company;
       const customer = customerRows[0] as Customer;
 
+      // Document Templates: every field here is this renderer's own
+      // built-in default, verbatim - a company/doc_type with no
+      // customization row renders byte-for-byte the same PDF this always
+      // produced (see getEffectiveDocumentTemplate's own doc comment).
+      const template = await getEffectiveDocumentTemplate(doc.company_id, docType as TemplateDocType, {
+        accentColor: "#1B7A4D",
+        headerLabel: docType === "tax_invoice" ? "Original for Recipient" : null,
+        footerNote: `This is a computer-generated ${title.toLowerCase()}.`,
+      });
+
       streamDocumentPdf(
         res,
         title,
@@ -848,7 +859,8 @@ export function createSalesDocumentRouter(
           line_total: Number(i.line_total),
         })),
         customer,
-        company
+        company,
+        template
       );
     })
   );
