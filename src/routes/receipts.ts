@@ -523,6 +523,10 @@ receiptsRouter.get(
       accentColor: "#16A34A",
       headerLabel: null,
       footerNote: "This is a computer-generated receipt.",
+      // No classic_gst renderer exists for Receipts - "modern" (this
+      // renderer's only look) stays the default regardless of what the 4
+      // sales doc types default to.
+      templateStyle: "modern",
     });
 
     streamReceiptPdf(res, receipt, customerRows[0] as Customer, companyRows[0] as Company, allocations, template);

@@ -19,6 +19,20 @@ export const TEMPLATE_DOC_TYPES = [
 
 export type TemplateDocType = (typeof TEMPLATE_DOC_TYPES)[number];
 
+/**
+ * Selectable PDF layouts, independent of the show_logo/accent_color/etc.
+ * overrides above - a style is a different *renderer* entirely, not a
+ * variation on one renderer's output. "modern" is this app's original
+ * look (documentPdf.ts/receiptPdf.ts); "classic_gst" is a Tally-style
+ * Indian GST Tax Invoice format matching a customer-supplied sample
+ * (classicGstDocumentPdf.ts), added as the new default for the 4 sales
+ * doc types that have PDF export. New styles register here and in the one
+ * `switch` each PDF route uses to pick a renderer - nothing else needs to
+ * change to add one.
+ */
+export const TEMPLATE_STYLES = ["classic_gst", "modern"] as const;
+export type TemplateStyle = (typeof TEMPLATE_STYLES)[number];
+
 /** Which of these doc types actually have a PDF export today that reads
  * this settings row - the rest are still fully configurable (ready for
  * whenever their own PDF export is built), just not consumed by anything
@@ -38,6 +52,11 @@ export interface DocumentTemplateDefaults {
    * every type except Tax Invoice's built-in "Original for Recipient"). */
   headerLabel: string | null;
   footerNote: string;
+  /** The style a route falls back to when no row exists. Receipts (which
+   * have no classic_gst renderer) must pass "modern" here - never rely on
+   * the column's own DB default, which is "classic_gst" for the sales doc
+   * types. */
+  templateStyle: TemplateStyle;
 }
 
 export interface EffectiveDocumentTemplate {
@@ -47,6 +66,7 @@ export interface EffectiveDocumentTemplate {
   accentColor: string;
   headerLabel: string | null;
   footerNote: string;
+  templateStyle: TemplateStyle;
 }
 
 /**
@@ -76,5 +96,10 @@ export async function getEffectiveDocumentTemplate(
     accentColor: row?.accent_color || defaults.accentColor,
     headerLabel: row && row.header_label !== null ? row.header_label : defaults.headerLabel,
     footerNote: row && row.footer_note !== null ? row.footer_note : defaults.footerNote,
+    templateStyle: row && isTemplateStyle(row.template_style) ? row.template_style : defaults.templateStyle,
   };
+}
+
+function isTemplateStyle(v: unknown): v is TemplateStyle {
+  return typeof v === "string" && (TEMPLATE_STYLES as readonly string[]).includes(v);
 }

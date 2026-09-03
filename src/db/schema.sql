@@ -1482,6 +1482,7 @@ CREATE TABLE IF NOT EXISTS document_templates (
   accent_color VARCHAR(7) NULL,
   header_label VARCHAR(100) NULL,
   footer_note VARCHAR(255) NULL,
+  template_style VARCHAR(30) NULL,
   updated_by INT UNSIGNED NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1489,3 +1490,14 @@ CREATE TABLE IF NOT EXISTS document_templates (
   FOREIGN KEY (company_id) REFERENCES companies(id),
   FOREIGN KEY (updated_by) REFERENCES users(id)
 );
+-- Second selectable PDF style ("classic_gst" - a Tally-style Indian GST Tax
+-- Invoice format matching a customer-supplied sample) alongside the
+-- original ("modern"). Added after the table above already shipped, so an
+-- existing install needs this column added explicitly - CREATE TABLE IF NOT
+-- EXISTS above is a no-op once the table exists. NULL (the only value any
+-- pre-existing row can have) means "use this doc type's own default" - same
+-- override convention as accent_color/header_label/footer_note - which the
+-- PDF routes below set to 'classic_gst' for the 4 sales document types
+-- (the new default) and 'modern' for Receipts (no classic_gst renderer
+-- exists for it).
+ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS template_style VARCHAR(30) NULL;

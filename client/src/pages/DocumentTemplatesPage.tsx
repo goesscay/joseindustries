@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Table, Button, Space, Modal, Form, Input, Switch, ColorPicker, message, Popconfirm, Typography, Tag } from "antd";
+import { Table, Button, Space, Modal, Form, Input, Select, Switch, ColorPicker, message, Popconfirm, Typography, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { EditOutlined, UndoOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
@@ -19,6 +19,13 @@ const DOC_TYPE_LABELS: Record<string, string> = {
 };
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+// Kept in sync with TEMPLATE_STYLES in src/services/documentTemplates.ts -
+// adding a new style there means adding its label here too.
+const TEMPLATE_STYLE_LABELS: Record<string, string> = {
+  classic_gst: "Classic GST (Tally-style)",
+  modern: "Modern",
+};
 
 export function DocumentTemplatesPage() {
   const { can } = useAuth();
@@ -56,7 +63,20 @@ export function DocumentTemplatesPage() {
       accent_color: record.accent_color || undefined,
       header_label: record.header_label || "",
       footer_note: record.footer_note || "",
+      template_style: record.template_style || undefined,
     });
+  }
+
+  /** What a doc type renders as when template_style is left null - matches
+   * each PDF route's own `defaults.templateStyle` argument. Doc types with
+   * no PDF export yet have no renderer to default to, so there's nothing
+   * meaningful to show. */
+  function defaultStyleLabel(docType: string): string {
+    if (docType === "receipt") return TEMPLATE_STYLE_LABELS.modern;
+    if (["quotation", "proforma_invoice", "delivery_challan", "tax_invoice"].includes(docType)) {
+      return TEMPLATE_STYLE_LABELS.classic_gst;
+    }
+    return "N/A";
   }
 
   async function handleSubmit() {
@@ -73,6 +93,7 @@ export function DocumentTemplatesPage() {
         accent_color: accentColor || null,
         header_label: values.header_label || null,
         footer_note: values.footer_note || null,
+        template_style: values.template_style || null,
       });
       message.success("Document template updated");
       setEditing(null);
@@ -124,6 +145,17 @@ export function DocumentTemplatesPage() {
         ),
     },
     { title: "Header Label", dataIndex: "header_label", key: "header_label", render: (v: string | null) => v || <Typography.Text type="secondary">default</Typography.Text> },
+    {
+      title: "Template Style",
+      key: "template_style",
+      width: 150,
+      render: (_, r) =>
+        r.template_style ? (
+          TEMPLATE_STYLE_LABELS[r.template_style] || r.template_style
+        ) : (
+          <Typography.Text type="secondary">default ({defaultStyleLabel(r.doc_type)})</Typography.Text>
+        ),
+    },
     {
       title: "Logo",
       dataIndex: "show_logo",
@@ -202,6 +234,21 @@ export function DocumentTemplatesPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical" size="middle">
+          <Form.Item
+            name="template_style"
+            label="Template Style"
+            extra={editing ? `Leave blank to use this document's default (${defaultStyleLabel(editing.doc_type)}).` : undefined}
+          >
+            <Select
+              allowClear
+              placeholder="Use the default"
+              options={Object.entries(TEMPLATE_STYLE_LABELS).map(([value, label]) => ({ value, label }))}
+            />
+          </Form.Item>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: -8 }}>
+            Classic GST is a monochrome Tally-style layout: it never shows a logo image and ignores the accent color
+            and header label below, but still honors the bank details / signature toggles.
+          </Typography.Paragraph>
           <Form.Item name="show_logo" label="Show Company Logo" valuePropName="checked">
             <Switch />
           </Form.Item>

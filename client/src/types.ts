@@ -1048,6 +1048,9 @@ export interface DocumentTemplate {
   accent_color: string | null;
   header_label: string | null;
   footer_note: string | null;
+  /** null = use this doc type's own default style (see
+   * getEffectiveDocumentTemplate's defaults argument at each call site). */
+  template_style: string | null;
   updated_by: number | null;
   created_at: string | null;
   updated_at: string | null;

@@ -7,6 +7,7 @@ import { getNextDocNumber } from "../services/numbering";
 import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
+import { streamClassicGstDocumentPdf } from "../services/pdf/classicGstDocumentPdf";
 import { getEffectiveDocumentTemplate, TemplateDocType } from "../services/documentTemplates";
 import {
   AccountingError,
@@ -844,24 +845,28 @@ export function createSalesDocumentRouter(
         accentColor: "#1B7A4D",
         headerLabel: docType === "tax_invoice" ? "Original for Recipient" : null,
         footerNote: `This is a computer-generated ${title.toLowerCase()}.`,
+        // Tally-style GST invoice format is the new default for these 4
+        // sales doc types - see documentTemplates.ts's TEMPLATE_STYLES doc
+        // comment. "modern" (this renderer's original look) stays fully
+        // selectable per (company, doc_type) via the Document Templates
+        // settings page.
+        templateStyle: "classic_gst",
       });
 
-      streamDocumentPdf(
-        res,
-        title,
-        doc,
-        items.map((i) => ({
-          ...i,
-          qty: Number(i.qty),
-          rate: Number(i.rate),
-          discount_percent: Number(i.discount_percent),
-          tax_rate: Number(i.tax_rate),
-          line_total: Number(i.line_total),
-        })),
-        customer,
-        company,
-        template
-      );
+      const normalizedItems = items.map((i) => ({
+        ...i,
+        qty: Number(i.qty),
+        rate: Number(i.rate),
+        discount_percent: Number(i.discount_percent),
+        tax_rate: Number(i.tax_rate),
+        line_total: Number(i.line_total),
+      }));
+
+      if (template.templateStyle === "classic_gst") {
+        streamClassicGstDocumentPdf(res, title, doc, normalizedItems, customer, company, template);
+      } else {
+        streamDocumentPdf(res, title, doc, normalizedItems, customer, company, template);
+      }
     })
   );
 
