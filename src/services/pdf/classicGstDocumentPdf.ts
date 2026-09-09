@@ -133,14 +133,16 @@ export function streamClassicGstDocumentPdf(
   const grandTotal = Number(document.grand_total);
   const isInterState = igstTotal > 0;
 
+  // A crisper, slightly bolder line weight than a bare hairline (0.75) for
+  // a more finished, professional appearance throughout.
   function rect(x: number, y: number, w: number, h: number) {
-    doc.lineWidth(0.75).strokeColor(INK).rect(x, y, w, h).stroke();
+    doc.lineWidth(0.9).strokeColor(INK).rect(x, y, w, h).stroke();
   }
   function hLine(x1: number, x2: number, y: number) {
-    doc.lineWidth(0.75).strokeColor(INK).moveTo(x1, y).lineTo(x2, y).stroke();
+    doc.lineWidth(0.9).strokeColor(INK).moveTo(x1, y).lineTo(x2, y).stroke();
   }
   function vLine(x: number, y1: number, y2: number) {
-    doc.lineWidth(0.75).strokeColor(INK).moveTo(x, y1).lineTo(x, y2).stroke();
+    doc.lineWidth(0.9).strokeColor(INK).moveTo(x, y1).lineTo(x, y2).stroke();
   }
   function text(
     str: string,
@@ -205,20 +207,25 @@ export function streamClassicGstDocumentPdf(
       .filter(Boolean)
       .join("   ");
 
+    // Company/Buyer text runs noticeably larger than the reference grid's
+    // dense label/value pairs, and at a taller line pitch than LINE_H, so
+    // these two blocks actually use their generous fixed height (116.1 /
+    // 109.3) instead of leaving most of it blank.
+    const HEADER_TEXT_LINE_H = 18.5;
     const innerW = HEADER_LEFT_W - pad * 2;
-    let ly = boxY + 3;
-    text(company.name, CONTENT_LEFT + pad, ly, { bold: true, size: 11, width: innerW });
-    ly += LINE_H;
-    doc.font("Helvetica").fontSize(7.8).fillColor(MUTED);
+    let ly = boxY + 4;
+    text(company.name, CONTENT_LEFT + pad, ly, { bold: true, size: 13, width: innerW });
+    ly += HEADER_TEXT_LINE_H;
+    doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
     for (const line of addrLines) {
       doc.text(line, CONTENT_LEFT + pad, ly, { width: innerW });
-      // A wrapped line (a long address) needs more than one LINE_H of
-      // room, or the next line crowds right into its second row.
-      ly += Math.max(LINE_H, doc.heightOfString(line, { width: innerW }) + 3);
+      // A wrapped line (a long address) needs more than one line's worth
+      // of room, or the next line crowds right into its second row.
+      ly += Math.max(HEADER_TEXT_LINE_H, doc.heightOfString(line, { width: innerW }) + 4);
     }
     if (stateLine) {
       doc.text(stateLine, CONTENT_LEFT + pad, ly, { width: innerW });
-      ly += LINE_H;
+      ly += HEADER_TEXT_LINE_H;
     }
 
     const buyerAddrLines = [
@@ -228,15 +235,15 @@ export function streamClassicGstDocumentPdf(
       document.place_of_supply ? `Place of Supply: ${document.place_of_supply}` : "",
     ].filter(Boolean);
 
-    let by = boxY + COMPANY_BLOCK_H + 3;
-    text("Buyer (Bill to)", CONTENT_LEFT + pad, by, { bold: true, size: 8, color: MUTED, width: HEADER_LEFT_W - pad * 2 });
-    by += LINE_H;
-    text(customer.name, CONTENT_LEFT + pad, by, { bold: true, size: 9.5, width: HEADER_LEFT_W - pad * 2 });
-    by += LINE_H;
-    doc.font("Helvetica").fontSize(7.8).fillColor(MUTED);
+    let by = boxY + COMPANY_BLOCK_H + 4;
+    text("Buyer (Bill to)", CONTENT_LEFT + pad, by, { bold: true, size: 9, color: MUTED, width: HEADER_LEFT_W - pad * 2 });
+    by += HEADER_TEXT_LINE_H;
+    text(customer.name, CONTENT_LEFT + pad, by, { bold: true, size: 12, width: HEADER_LEFT_W - pad * 2 });
+    by += HEADER_TEXT_LINE_H;
+    doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
     for (const line of buyerAddrLines) {
       doc.text(line, CONTENT_LEFT + pad, by, { width: innerW });
-      by += Math.max(LINE_H, doc.heightOfString(line, { width: innerW }) + 3);
+      by += Math.max(HEADER_TEXT_LINE_H, doc.heightOfString(line, { width: innerW }) + 4);
     }
 
     // -- Right grid: 7 fixed-height rows, most split into two label/value
@@ -255,16 +262,20 @@ export function streamClassicGstDocumentPdf(
     let ry = boxY;
     rows.forEach((row, idx) => {
       const h = GRID_ROW_H[idx];
+      // The top row (Invoice No. / Dated) is this grid's most-referenced
+      // pair, so its values are centered under their labels rather than
+      // left-aligned like the rest of the reference fields below.
+      const valueAlign = idx === 0 ? "center" : "left";
       if (idx > 0) hLine(HEADER_RIGHT_X, HEADER_RIGHT_X + HEADER_RIGHT_W, ry);
       if (row.length === 4) {
         const [l1, v1, l2, v2] = row;
         text(l1, HEADER_RIGHT_X + pad, ry + 3, { size: 7, color: MUTED, width: HEADER_RIGHT_COL_A_W - pad * 2 });
-        text(v1, HEADER_RIGHT_X + pad, ry + 12, { size: 8, width: HEADER_RIGHT_COL_A_W - pad * 2 });
+        text(v1, HEADER_RIGHT_X + pad, ry + 12, { size: 8, width: HEADER_RIGHT_COL_A_W - pad * 2, align: valueAlign });
         vLine(HEADER_RIGHT_X + HEADER_RIGHT_COL_A_W, ry, ry + h);
         const bx = HEADER_RIGHT_X + HEADER_RIGHT_COL_A_W;
         const bw = HEADER_RIGHT_W - HEADER_RIGHT_COL_A_W;
         text(l2, bx + pad, ry + 3, { size: 7, color: MUTED, width: bw - pad * 2 });
-        text(v2, bx + pad, ry + 12, { size: 8, width: bw - pad * 2 });
+        text(v2, bx + pad, ry + 12, { size: 8, width: bw - pad * 2, align: valueAlign });
       } else {
         const [l1, v1] = row;
         text(l1, HEADER_RIGHT_X + pad, ry + 3, { size: 7, color: MUTED, width: HEADER_RIGHT_W - pad * 2 });
@@ -294,7 +305,11 @@ export function streamClassicGstDocumentPdf(
   const SUMMARY_BOTTOM_GAP = 26.2;
 
   const COLS = (() => {
-    const widths = { sno: 22.6, desc: 168.5, hsn: 52.0, gst: 46.0, qty: 60.8, rate: 104.8, amount: 61.8 };
+    // Rate narrowed and Amount widened relative to the sample's own
+    // measured split (104.8/61.8) - the Amount column carries the wider,
+    // more important figure and deserves the room; Rate's values are
+    // short enough not to need as much. Total still sums to CONTENT_WIDTH.
+    const widths = { sno: 22.6, desc: 168.5, hsn: 52.0, gst: 46.0, qty: 60.8, rate: 74.8, amount: 91.8 };
     let x = CONTENT_LEFT;
     const cols: Record<string, { x: number; width: number }> = {};
     for (const key of Object.keys(widths) as (keyof typeof widths)[]) {
@@ -465,9 +480,18 @@ export function streamClassicGstDocumentPdf(
     const tableRight = x;
     const bodyRowCount = Math.max(2, groups.length); // at least 2 slots, matching the sample's reserved blank row
 
-    function hsnColumnDividers(y1: number, y2: number) {
+    // Rate|Amount is a genuine two-column split within each tax-type
+    // group, but the group's own title ("Central Tax" etc.) is one cell
+    // MERGED across both of those columns - so the divider between a
+    // group's Rate and Amount sub-columns must start below the title row,
+    // not at the very top, or it visually cuts straight through the
+    // title text.
+    const withinGroupKeys = new Set<keyof typeof COLW>(["cgstAmt", "sgstAmt", "igstAmt"]);
+    function hsnColumnDividers(y1: number, y2: number, skipWithinGroup = false) {
       keys.forEach((k) => {
-        if (positions[k].x > CONTENT_LEFT) vLine(positions[k].x, y1, y2);
+        if (positions[k].x > CONTENT_LEFT && !(skipWithinGroup && withinGroupKeys.has(k))) {
+          vLine(positions[k].x, y1, y2);
+        }
       });
     }
 
@@ -475,7 +499,11 @@ export function streamClassicGstDocumentPdf(
     const topY = state.y;
     const headerH = HSN_GROUP_HEADER_H + HSN_SUBHEADER_H;
     rect(CONTENT_LEFT, topY, tableRight - CONTENT_LEFT, headerH);
-    hsnColumnDividers(topY, topY + headerH);
+    // Full-height dividers between distinct cells (HSN/Taxable/each tax
+    // group) span the whole header; the Rate|Amount divider inside each
+    // group is drawn separately below, confined to the sub-header row.
+    hsnColumnDividers(topY, topY + headerH, true);
+    hsnColumnDividers(topY + HSN_GROUP_HEADER_H, topY + headerH);
     text("HSN/SAC", positions.hsn.x, topY + 10, { width: positions.hsn.width, align: "center", bold: true, size: 7.5 });
     text("Taxable Value", positions.taxable.x, topY + 10, { width: positions.taxable.width, align: "center", bold: true, size: 7.5 });
     const groupHeaders: [string, keyof typeof COLW, keyof typeof COLW][] = [
