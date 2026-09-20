@@ -168,6 +168,12 @@ export interface DocumentLineItem {
   discount_percent: number;
   tax_rate: number;
   line_total?: number;
+  /** Measured (area-billed) lines - see the "Measured" PDF template. qty = height*length*pieces when both dimensions are set. */
+  height?: number | null;
+  length?: number | null;
+  pieces?: number | null;
+  /** "item" (numbered), "heading" (numbered group title, no amounts) or "sub" (un-numbered, under a heading). */
+  line_kind?: "item" | "heading" | "sub";
 }
 
 export type DocType = "quotation" | "proforma_invoice" | "delivery_challan" | "tax_invoice" | "receipt";
@@ -212,6 +218,9 @@ export interface SalesDocument {
   due_date: string | null;
   credit_period: string | null;
   reverse_charge: boolean | number;
+
+  /** PDF template this document was created with (fixed at creation). */
+  template_style?: string | null;
 
   subtotal: string;
   discount_amount: string;

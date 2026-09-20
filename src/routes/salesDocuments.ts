@@ -8,8 +8,16 @@ import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
 import { streamClassicGstDocumentPdf } from "../services/pdf/classicGstDocumentPdf";
-import { streamClassicQuotationPdf } from "../services/pdf/classicQuotationPdf";
-import { getEffectiveDocumentTemplate, resolveTemplateStyle, pickStyle, TemplateDocType } from "../services/documentTemplates";
+import { streamClassicQuotationPdf, streamClassicMeasuredPdf } from "../services/pdf/classicQuotationPdf";
+import {
+  getEffectiveDocumentTemplate,
+  resolveTemplateStyle,
+  pickStyle,
+  stylesForDocType,
+  isTemplateStyle,
+  TEMPLATE_STYLE_DOC_TYPES,
+  TemplateDocType,
+} from "../services/documentTemplates";
 import {
   AccountingError,
   getJournalBySource,
@@ -102,23 +110,73 @@ function pickOptionalTextFields(body: any): Record<string, string | null> {
   return result;
 }
 
+type LineKind = "item" | "heading" | "sub";
+const LINE_KINDS: LineKind[] = ["item", "heading", "sub"];
+
 interface NormalizedLine extends LineInput {
   item_id: number | null;
   description: string;
   hsn_code: string | null;
   unit: string;
+  /** Measured (area-billed) lines - see documents' "measured" template style.
+   * When height and length are given, qty is derived as height*length*pieces
+   * (the billable area) so every total/GST/stock computation downstream keeps
+   * working off qty*rate unchanged. */
+  height: number | null;
+  length: number | null;
+  pieces: number | null;
+  /** "item" = a numbered line; "heading" = a numbered group title with no
+   * amounts of its own; "sub" = an un-numbered line belonging to the heading
+   * above it. Only the measured template lays these out differently. */
+  line_kind: LineKind;
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+function optionalDimension(raw: unknown, label: string): number | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new ValidationError(`${label} must be zero or a positive number`);
+  return n;
 }
 
 function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ValidationError("At least one line item is required");
   }
-  return rawItems.map((raw) => {
-    const qty = Number(raw.qty);
+  const lines = rawItems.map((raw) => {
+    const line_kind: LineKind = LINE_KINDS.includes(raw.line_kind) ? raw.line_kind : "item";
+    if (!raw.description) throw new ValidationError("Each line item needs a description");
+
+    if (line_kind === "heading") {
+      // A group title carries no quantity, price or tax.
+      return {
+        item_id: null,
+        description: String(raw.description),
+        hsn_code: null,
+        qty: 0,
+        unit: raw.unit || "pcs",
+        rate: 0,
+        discount_percent: 0,
+        tax_rate: 0,
+        height: null,
+        length: null,
+        pieces: null,
+        line_kind,
+      };
+    }
+
+    const height = optionalDimension(raw.height, "Height");
+    const length = optionalDimension(raw.length, "Length");
+    const measured = !!height && !!length;
+    const pieces = measured ? optionalDimension(raw.pieces, "Pieces") || 1 : optionalDimension(raw.pieces, "Pieces");
+    const qty = measured ? round4(height! * length! * pieces!) : Number(raw.qty);
     const rate = Number(raw.rate);
     const tax_rate = Number(raw.tax_rate ?? 0);
     const discount_percent = Number(raw.discount_percent ?? 0);
-    if (!raw.description || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(rate) || rate < 0) {
+    if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(rate) || rate < 0) {
       throw new ValidationError("Each line item needs a description, positive qty, and rate");
     }
     if (!Number.isFinite(discount_percent) || discount_percent < 0 || discount_percent > 100) {
@@ -129,12 +187,20 @@ function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
       description: String(raw.description),
       hsn_code: raw.hsn_code ?? null,
       qty,
-      unit: raw.unit || "pcs",
+      unit: measured ? raw.unit || "sq.ft" : raw.unit || "pcs",
       rate,
       discount_percent,
       tax_rate,
+      height: measured ? height : null,
+      length: measured ? length : null,
+      pieces: measured ? pieces : null,
+      line_kind,
     };
   });
+  if (lines.every((l) => l.line_kind === "heading")) {
+    throw new ValidationError("At least one line item with an amount is required");
+  }
+  return lines;
 }
 
 /**
@@ -223,6 +289,20 @@ export function createSalesDocumentRouter(
     })
   );
 
+  // Which PDF templates a document of this type can be created with, and the
+  // one Settings > Document Templates currently selects for the company -
+  // what the create form pre-selects. Registered before the "/:id" routes.
+  router.get(
+    "/template-options",
+    requireModuleAccess(MODULE, "view"),
+    asyncHandler(async (req, res) => {
+      const companyId = Number(req.query.company_id);
+      const available = stylesForDocType(docType as TemplateDocType);
+      const selected = companyId ? await resolveTemplateStyle(companyId, docType as TemplateDocType) : available[0];
+      res.json({ available, selected });
+    })
+  );
+
   router.get(
     "/:id",
     requireModuleAccess(MODULE, "view"),
@@ -250,6 +330,7 @@ export function createSalesDocumentRouter(
         freight_charges,
         installation_charges,
         confirm_negative_stock,
+        template_style: requestedStyle,
       } = req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
@@ -290,7 +371,15 @@ export function createSalesDocumentRouter(
       // Stamp the PDF template style the settings select *right now* onto
       // this document, so it keeps that look even if the setting (or the
       // list of available styles) changes later.
-      const templateStyle = await resolveTemplateStyle(company_id, docType as TemplateDocType);
+      // An explicit choice on the form wins over the setting (some invoices
+      // go out in a different format); it must be one this type can draw.
+      let templateStyle = await resolveTemplateStyle(company_id, docType as TemplateDocType);
+      if (requestedStyle) {
+        if (!isTemplateStyle(requestedStyle) || !TEMPLATE_STYLE_DOC_TYPES[requestedStyle].includes(docType as TemplateDocType)) {
+          return res.status(400).json({ message: `The "${requestedStyle}" template is not available for this document type` });
+        }
+        templateStyle = requestedStyle;
+      }
 
       const conn = await pool.getConnection();
       try {
@@ -367,8 +456,9 @@ export function createSalesDocumentRouter(
           const { lineTotal } = computeLine(line);
           await conn.query(
             `INSERT INTO document_items
-               (document_id, item_id, description, hsn_code, qty, unit, rate, discount_percent, tax_rate, line_total, sort_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (document_id, item_id, description, hsn_code, qty, unit, rate, discount_percent, tax_rate, line_total, sort_order,
+                height, length, pieces, line_kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               documentId,
               line.item_id,
@@ -381,6 +471,10 @@ export function createSalesDocumentRouter(
               line.tax_rate,
               lineTotal,
               index,
+              line.height,
+              line.length,
+              line.pieces,
+              line.line_kind,
             ]
           );
         }
@@ -489,7 +583,14 @@ export function createSalesDocumentRouter(
         freight_charges,
         installation_charges,
         confirm_negative_stock,
+        template_style: requestedStyle,
       } = req.body ?? {};
+      if (
+        requestedStyle &&
+        (!isTemplateStyle(requestedStyle) || !TEMPLATE_STYLE_DOC_TYPES[requestedStyle].includes(docType as TemplateDocType))
+      ) {
+        return res.status(400).json({ message: `The "${requestedStyle}" template is not available for this document type` });
+      }
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
       }
@@ -574,13 +675,17 @@ export function createSalesDocumentRouter(
             id,
           ]
         );
+        // Only touched when the form sends one - editing a document never
+        // silently re-stamps it with whatever the setting says today.
+        if (requestedStyle) await conn.query("UPDATE documents SET template_style = ? WHERE id = ?", [requestedStyle, id]);
         await conn.query("DELETE FROM document_items WHERE document_id = ?", [id]);
         for (const [index, line] of lines.entries()) {
           const { lineTotal } = computeLine(line);
           await conn.query(
             `INSERT INTO document_items
-               (document_id, item_id, description, hsn_code, qty, unit, rate, discount_percent, tax_rate, line_total, sort_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (document_id, item_id, description, hsn_code, qty, unit, rate, discount_percent, tax_rate, line_total, sort_order,
+                height, length, pieces, line_kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               id,
               line.item_id,
@@ -593,6 +698,10 @@ export function createSalesDocumentRouter(
               line.tax_rate,
               lineTotal,
               index,
+              line.height,
+              line.length,
+              line.pieces,
+              line.line_kind,
             ]
           );
         }
@@ -861,21 +970,46 @@ export function createSalesDocumentRouter(
         ? pickStyle(doc.template_style, docType as TemplateDocType)
         : template.templateStyle;
 
-      const normalizedItems = items.map((i) => ({
+      const normalizedItems: DocumentItem[] = items.map((i) => ({
         ...i,
         qty: Number(i.qty),
         rate: Number(i.rate),
         discount_percent: Number(i.discount_percent),
         tax_rate: Number(i.tax_rate),
         line_total: Number(i.line_total),
+        height: i.height == null ? null : Number(i.height),
+        length: i.length == null ? null : Number(i.length),
+        pieces: i.pieces == null ? null : Number(i.pieces),
       }));
+      // Group headings (and un-numbered sub-lines) only have a home in the
+      // measured layout. Every other template gets plain lines: a heading is
+      // folded into the descriptions of the lines under it ("Room 2 -
+      // Wardrobe Frame") so its wording isn't lost, and the heading row itself
+      // (which has no amounts) is dropped.
+      const linesForPdf =
+        template.templateStyle === "classic_measured"
+          ? normalizedItems
+          : (() => {
+              let group = "";
+              const out: DocumentItem[] = [];
+              for (const it of normalizedItems) {
+                if (it.line_kind === "heading") {
+                  group = it.description;
+                  continue;
+                }
+                out.push(it.line_kind === "sub" && group ? { ...it, description: `${group} - ${it.description}` } : it);
+              }
+              return out;
+            })();
 
-      if (template.templateStyle === "classic_quotation") {
-        streamClassicQuotationPdf(res, title, doc, normalizedItems, customer, company, template);
+      if (template.templateStyle === "classic_measured") {
+        streamClassicMeasuredPdf(res, title, doc, linesForPdf, customer, company, template);
+      } else if (template.templateStyle === "classic_quotation") {
+        streamClassicQuotationPdf(res, title, doc, linesForPdf, customer, company, template);
       } else if (template.templateStyle === "classic_gst") {
-        streamClassicGstDocumentPdf(res, title, doc, normalizedItems, customer, company, template);
+        streamClassicGstDocumentPdf(res, title, doc, linesForPdf, customer, company, template);
       } else {
-        streamDocumentPdf(res, title, doc, normalizedItems, customer, company, template);
+        streamDocumentPdf(res, title, doc, linesForPdf, customer, company, template);
       }
     })
   );

@@ -27,6 +27,7 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 const TEMPLATE_STYLE_LABELS: Record<string, string> = {
   classic_gst: "Classic GST (Tally-style)",
   classic_quotation: "Classic Quotation",
+  classic_measured: "Measured Invoice (Sq.Ft)",
   modern: "Modern",
 };
 
@@ -244,10 +245,10 @@ export function DocumentTemplatesPage() {
             />
           </Form.Item>
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: -8 }}>
-            A document keeps the template that was selected when it was created - changing this only affects
-            documents created afterwards, never existing ones. Classic GST is monochrome: it never shows a logo image
-            and ignores the accent color and header label below, but still honors the bank details / signature
-            toggles.
+            A document keeps the template it was created with (it can also be picked per document when creating
+            it) - changing this only affects documents created afterwards, never existing ones. The Classic
+            templates share a letterhead header that uses the logo and accent color below; Classic GST is otherwise
+            monochrome and ignores the header label. The bank details / signature toggles apply to all of them.
           </Typography.Paragraph>
           <Form.Item name="show_logo" label="Show Company Logo" valuePropName="checked">
             <Switch />

@@ -1517,3 +1517,19 @@ UPDATE documents d
   LEFT JOIN document_templates t ON t.company_id = d.company_id AND t.doc_type = d.doc_type
   SET d.template_style = COALESCE(t.template_style, 'classic_gst')
   WHERE d.template_style IS NULL;
+
+-- Measured (area-billed) document lines, for the "measured" invoice template
+-- (Height x Length x Pieces = Sq.Ft, billed per sq.ft - interiors work).
+-- height/length/pieces are the entered inputs; qty stays the single
+-- authoritative billable quantity (= height*length*pieces for such lines), so
+-- totals, GST and stock keep working off qty*rate unchanged. That area needs
+-- more precision than the old 2-decimal qty (26.125 sq.ft must not round to
+-- 26.13), hence the wider qty. line_kind lays out grouped rows: 'item' is a
+-- numbered line, 'heading' a numbered group title with no amounts, 'sub' an
+-- un-numbered line under the heading above it.
+ALTER TABLE document_items
+  ADD COLUMN IF NOT EXISTS height DECIMAL(10, 3) NULL,
+  ADD COLUMN IF NOT EXISTS length DECIMAL(10, 3) NULL,
+  ADD COLUMN IF NOT EXISTS pieces DECIMAL(10, 3) NULL,
+  ADD COLUMN IF NOT EXISTS line_kind VARCHAR(10) NOT NULL DEFAULT 'item';
+ALTER TABLE document_items MODIFY COLUMN qty DECIMAL(12, 4) NOT NULL DEFAULT 1;

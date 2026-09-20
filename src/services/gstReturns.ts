@@ -179,7 +179,7 @@ export async function getGstr1(companyId: number, from: string, to: string): Pro
     const [itemRows] = await pool.query<any[]>(
       `SELECT hsn_code, qty, rate, discount_percent, tax_rate
        FROM document_items
-       WHERE document_id IN (?)`,
+       WHERE document_id IN (?) AND line_kind <> 'heading'`,
       [activeIds]
     );
     for (const item of itemRows) {

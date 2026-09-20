@@ -107,6 +107,23 @@ interface SalesDocumentPageProps {
   showPaymentStatus?: boolean;
 }
 
+const TEMPLATE_STYLE_LABELS: Record<string, string> = {
+  classic_gst: "Classic GST (Tally-style)",
+  classic_quotation: "Classic Quotation",
+  classic_measured: "Measured Invoice (Sq.Ft)",
+  modern: "Modern",
+};
+
+/** A measured line bills its area: height x length x pieces (pieces default 1)
+ * - the same rule the server applies. Any other line just bills its qty. */
+function effectiveQty(line: DocumentLineItem | undefined): number {
+  if (!line) return 0;
+  const h = Number(line.height) || 0;
+  const l = Number(line.length) || 0;
+  if (h > 0 && l > 0) return Math.round(h * l * (Number(line.pieces) || 1) * 10000) / 10000;
+  return Number(line.qty) || 0;
+}
+
 export function SalesDocumentPage({
   apiPath,
   title,
@@ -150,6 +167,11 @@ export function SalesDocumentPage({
   const lineItems = Form.useWatch("items", form) as DocumentLineItem[] | undefined;
   const freightWatch = Form.useWatch("freight_charges", form) as number | undefined;
   const installationWatch = Form.useWatch("installation_charges", form) as number | undefined;
+  const companyWatch = Form.useWatch("company_id", form) as number | undefined;
+  const templateStyleWatch = Form.useWatch("template_style", form) as string | undefined;
+  // Which PDF templates this document type can use, and the name shown for each.
+  const [templateOptions, setTemplateOptions] = useState<string[]>([]);
+  const measuredMode = templateStyleWatch === "classic_measured";
 
   const canDelete = can(permissionModule, "delete");
   const availableConvertTargets = (convertTargets ?? []).filter(
@@ -192,12 +214,32 @@ export function SalesDocumentPage({
       .catch(() => {});
   }, [docType]);
 
+  // Offer the PDF templates this document type can use (the one Settings >
+  // Document Templates selects for the company comes pre-selected on a new
+  // document). Not for a conversion: that posts to a different document type's
+  // endpoint, which picks its own template from the settings.
+  useEffect(() => {
+    if (!modalOpen || !companyWatch || convertTarget) {
+      setTemplateOptions([]);
+      return;
+    }
+    api
+      .get<{ available: string[]; selected: string }>(`${apiPath}/template-options?company_id=${companyWatch}`)
+      .then((res) => {
+        setTemplateOptions(res.available);
+        if (!editingDoc) form.setFieldsValue({ template_style: res.selected });
+      })
+      .catch(() => setTemplateOptions([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen, companyWatch, convertTarget, apiPath]);
+
   const totals = useMemo(() => {
     let subtotal = 0;
     let discountAmount = 0;
     let tax = 0;
     (lineItems || []).forEach((line) => {
-      const qty = Number(line?.qty) || 0;
+      if (line?.line_kind === "heading") return;
+      const qty = effectiveQty(line);
       const rate = Number(line?.rate) || 0;
       const discountPercent = Number(line?.discount_percent) || 0;
       const taxRate = Number(line?.tax_rate) || 0;
@@ -238,7 +280,7 @@ export function SalesDocumentPage({
       installation_charges: 0,
       terms_and_conditions: defaultTemplate?.content,
       items: [
-        { item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, discount_percent: 0, tax_rate: 18 },
+        { item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, discount_percent: 0, tax_rate: 18, line_kind: "item" },
       ],
     });
     setModalOpen(true);
@@ -249,7 +291,7 @@ export function SalesDocumentPage({
     if (template) form.setFieldsValue({ terms_and_conditions: template.content });
   }
 
-  function fillFormFrom(doc: SalesDocument, docItems: DocumentLineItem[], issueDate: dayjs.Dayjs) {
+  function fillFormFrom(doc: SalesDocument, docItems: DocumentLineItem[], issueDate: dayjs.Dayjs, keepTemplate = false) {
     const values: Record<string, unknown> = {
       company_id: doc.company_id,
       customer_id: doc.customer_id,
@@ -285,7 +327,13 @@ export function SalesDocumentPage({
         rate: Number(i.rate),
         discount_percent: Number(i.discount_percent) || 0,
         tax_rate: Number(i.tax_rate),
+        height: i.height == null ? undefined : Number(i.height),
+        length: i.length == null ? undefined : Number(i.length),
+        pieces: i.pieces == null ? undefined : Number(i.pieces),
+        line_kind: i.line_kind || "item",
       })),
+      // A converted document is stamped by the target type's own setting.
+      template_style: keepTemplate ? doc.template_style || undefined : undefined,
     };
     for (const dateField of OPTIONAL_DATE_FIELDS) {
       const raw = (doc as unknown as Record<string, unknown>)[dateField];
@@ -322,7 +370,7 @@ export function SalesDocumentPage({
       setEditingDoc(res.document);
       setConvertTarget(null);
       setConvertSourceId(null);
-      fillFormFrom(res.document, res.items, dayjs(res.document.issue_date));
+      fillFormFrom(res.document, res.items, dayjs(res.document.issue_date), true);
       setModalOpen(true);
     } catch (err) {
       message.error(err instanceof Error ? err.message : `Failed to load ${title.toLowerCase()}`);
@@ -649,6 +697,17 @@ export function SalesDocumentPage({
                 <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
               </Form.Item>
             </Col>
+            {templateOptions.length > 1 && (
+              <Col xs={24} sm={8}>
+                <Form.Item
+                  name="template_style"
+                  label="PDF Template"
+                  extra="Fixed when the document is created - the format it is downloaded in."
+                >
+                  <Select options={templateOptions.map((value) => ({ value, label: TEMPLATE_STYLE_LABELS[value] || value }))} />
+                </Form.Item>
+              </Col>
+            )}
           </Row>
 
           <Collapse
@@ -838,10 +897,14 @@ export function SalesDocumentPage({
                   <table style={{ width: "100%", marginTop: 8, borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ textAlign: "left", fontSize: 12, color: "#888" }}>
+                        {measuredMode && <th style={{ width: 92 }}>Row type</th>}
                         <th style={{ minWidth: 150 }}>Item</th>
                         <th style={{ minWidth: 150 }}>Description</th>
                         <th style={{ width: 90 }}>HSN/SAC</th>
-                        <th style={{ width: 70 }}>Qty</th>
+                        {measuredMode && <th style={{ width: 70 }}>Height</th>}
+                        {measuredMode && <th style={{ width: 70 }}>Length</th>}
+                        {measuredMode && <th style={{ width: 60 }}>Pieces</th>}
+                        <th style={{ width: 80 }}>{measuredMode ? "Qty / Area" : "Qty"}</th>
                         <th style={{ width: 90 }}>Rate</th>
                         <th style={{ width: 65 }}>Disc %</th>
                         <th style={{ width: 70 }}>Tax %</th>
@@ -854,25 +917,44 @@ export function SalesDocumentPage({
                         const line = lineItems?.[name];
                         let lineTotal = 0;
                         if (line) {
-                          const base = round2((Number(line.qty) || 0) * (Number(line.rate) || 0));
+                          const base = line.line_kind === "heading" ? 0 : round2(effectiveQty(line) * (Number(line.rate) || 0));
                           const discount = round2((base * (Number(line.discount_percent) || 0)) / 100);
                           const taxable = round2(base - discount);
                           const tax = round2((taxable * (Number(line.tax_rate) || 0)) / 100);
                           lineTotal = round2(taxable + tax);
                         }
+                        const isHeading = line?.line_kind === "heading";
+                        const hasDims = (Number(line?.height) || 0) > 0 && (Number(line?.length) || 0) > 0;
                         return (
-                          <tr key={key}>
+                          <tr key={key} style={isHeading ? { background: "#fffbe6" } : undefined}>
+                            {measuredMode && (
+                              <td>
+                                <Form.Item name={[name, "line_kind"]} style={{ marginBottom: 0 }}>
+                                  <Select
+                                    size="small"
+                                    style={{ width: "100%" }}
+                                    options={[
+                                      { value: "item", label: "Item" },
+                                      { value: "heading", label: "Group heading" },
+                                      { value: "sub", label: "Sub-item" },
+                                    ]}
+                                  />
+                                </Form.Item>
+                              </td>
+                            )}
                             <td>
-                              <Select
-                                allowClear
-                                showSearch
-                                placeholder="From catalog"
-                                size="small"
-                                style={{ width: "100%" }}
-                                options={items.map((i) => ({ value: i.id, label: i.name }))}
-                                filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
-                                onChange={(value) => value && handleItemSelect(name, value)}
-                              />
+                              {!isHeading && (
+                                <Select
+                                  allowClear
+                                  showSearch
+                                  placeholder="From catalog"
+                                  size="small"
+                                  style={{ width: "100%" }}
+                                  options={items.map((i) => ({ value: i.id, label: i.name }))}
+                                  filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+                                  onChange={(value) => value && handleItemSelect(name, value)}
+                                />
+                              )}
                             </td>
                             <td>
                               <Form.Item
@@ -880,35 +962,73 @@ export function SalesDocumentPage({
                                 rules={[{ required: true, message: "Required" }]}
                                 style={{ marginBottom: 0 }}
                               >
-                                <Input size="small" placeholder="Description" />
+                                <Input size="small" placeholder={isHeading ? "Group heading (e.g. Room 2)" : "Description"} />
                               </Form.Item>
                             </td>
                             <td>
-                              <Form.Item name={[name, "hsn_code"]} style={{ marginBottom: 0 }}>
-                                <Input size="small" placeholder="HSN" />
-                              </Form.Item>
+                              {!isHeading && (
+                                <Form.Item name={[name, "hsn_code"]} style={{ marginBottom: 0 }}>
+                                  <Input size="small" placeholder="HSN" />
+                                </Form.Item>
+                              )}
+                            </td>
+                            {measuredMode && (
+                              <>
+                                <td>
+                                  {!isHeading && (
+                                    <Form.Item name={[name, "height"]} style={{ marginBottom: 0 }}>
+                                      <InputNumber size="small" min={0} style={{ width: "100%" }} />
+                                    </Form.Item>
+                                  )}
+                                </td>
+                                <td>
+                                  {!isHeading && (
+                                    <Form.Item name={[name, "length"]} style={{ marginBottom: 0 }}>
+                                      <InputNumber size="small" min={0} style={{ width: "100%" }} />
+                                    </Form.Item>
+                                  )}
+                                </td>
+                                <td>
+                                  {!isHeading && (
+                                    <Form.Item name={[name, "pieces"]} style={{ marginBottom: 0 }}>
+                                      <InputNumber size="small" min={0} placeholder="1" style={{ width: "100%" }} />
+                                    </Form.Item>
+                                  )}
+                                </td>
+                              </>
+                            )}
+                            <td>
+                              {isHeading ? null : measuredMode && hasDims ? (
+                                // Height x Length x Pieces is the billed quantity (sq.ft) - shown, not typed.
+                                <span style={{ whiteSpace: "nowrap" }}>{effectiveQty(line).toString()} sq.ft</span>
+                              ) : (
+                                <Form.Item name={[name, "qty"]} style={{ marginBottom: 0 }}>
+                                  <InputNumber size="small" min={0.01} style={{ width: "100%" }} />
+                                </Form.Item>
+                              )}
                             </td>
                             <td>
-                              <Form.Item name={[name, "qty"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0.01} style={{ width: "100%" }} />
-                              </Form.Item>
+                              {!isHeading && (
+                                <Form.Item name={[name, "rate"]} style={{ marginBottom: 0 }}>
+                                  <InputNumber size="small" min={0} style={{ width: "100%" }} />
+                                </Form.Item>
+                              )}
                             </td>
                             <td>
-                              <Form.Item name={[name, "rate"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0} style={{ width: "100%" }} />
-                              </Form.Item>
+                              {!isHeading && (
+                                <Form.Item name={[name, "discount_percent"]} style={{ marginBottom: 0 }}>
+                                  <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
+                                </Form.Item>
+                              )}
                             </td>
                             <td>
-                              <Form.Item name={[name, "discount_percent"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
-                              </Form.Item>
+                              {!isHeading && (
+                                <Form.Item name={[name, "tax_rate"]} style={{ marginBottom: 0 }}>
+                                  <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
+                                </Form.Item>
+                              )}
                             </td>
-                            <td>
-                              <Form.Item name={[name, "tax_rate"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
-                              </Form.Item>
-                            </td>
-                            <td style={{ whiteSpace: "nowrap" }}>{lineTotal.toFixed(2)}</td>
+                            <td style={{ whiteSpace: "nowrap" }}>{isHeading ? "" : lineTotal.toFixed(2)}</td>
                             <td>
                               {fields.length > 1 && (
                                 <Button
@@ -927,6 +1047,24 @@ export function SalesDocumentPage({
                               <Form.Item name={[name, "unit"]} noStyle>
                                 <Input />
                               </Form.Item>
+                              {/* Outside measured mode these still ride along, so an edited or
+                                  converted document does not lose its measured data. */}
+                              {!measuredMode && (
+                                <>
+                                  <Form.Item name={[name, "line_kind"]} noStyle>
+                                    <Input />
+                                  </Form.Item>
+                                  <Form.Item name={[name, "height"]} noStyle>
+                                    <Input />
+                                  </Form.Item>
+                                  <Form.Item name={[name, "length"]} noStyle>
+                                    <Input />
+                                  </Form.Item>
+                                  <Form.Item name={[name, "pieces"]} noStyle>
+                                    <Input />
+                                  </Form.Item>
+                                </>
+                              )}
                             </td>
                           </tr>
                         );
@@ -949,6 +1087,7 @@ export function SalesDocumentPage({
                       rate: 0,
                       discount_percent: 0,
                       tax_rate: 18,
+                      line_kind: "item",
                     })
                   }
                 >

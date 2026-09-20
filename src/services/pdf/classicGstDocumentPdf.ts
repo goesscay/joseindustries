@@ -3,6 +3,7 @@ import { Response } from "express";
 import { Company, Customer, DocumentItem, DocumentRecord } from "../../types";
 import { amountInWords } from "../../utils/numberToWords";
 import { EffectiveDocumentTemplate } from "../documentTemplates";
+import { drawLetterhead } from "./letterhead";
 
 // "classic_gst" style - a Tally-style Indian GST Tax Invoice format, built to
 // reproduce a customer-supplied sample (068 Unilink.pdf/.xlsx) EXACTLY - not
@@ -19,9 +20,10 @@ import { EffectiveDocumentTemplate } from "../documentTemplates";
 // fixed sections; grow only as a last-resort safety net when real content
 // (many items, a very long address) would otherwise overflow.
 //
-// Entirely monochrome (no accent color) and never shows a logo image,
-// matching the sample exactly - see documentTemplates.ts's TEMPLATE_STYLES
-// doc comment. Parameterized by `title` the same way streamDocumentPdf is,
+// The body is monochrome like the sample; the header is the shared letterhead
+// (letterhead.ts - logo, accent-coloured name and title band) used by every
+// classic template, replacing the sample's plain text company block, and the
+// items box flexes to fill the page under it. Parameterized by `title` the same way streamDocumentPdf is,
 // so one file covers Quotation/Proforma Invoice/Delivery Challan/Tax
 // Invoice.
 
@@ -51,6 +53,17 @@ const MUTED = "#444444";
 // the natural result of an Excel row-height export. Reused here wherever
 // the sample doesn't call for a taller reserved row.
 const LINE_H = 15.2;
+
+// Fixed section heights measured off the sample (see the comment on
+// streamClassicGstDocumentPdf) for everything below the items table.
+const WORDS_H = 30.4;
+const HSN_GROUP_HEADER_H = 14.7;
+const HSN_SUBHEADER_H = 15.2;
+const HSN_ROW_H = 15.2;
+const DECL_BANK_H = 56.8;
+// The sample reserves 91.1pt for the signature area; trimmed to pay for the
+// letterhead now sitting above the invoice.
+const SIGNATURE_H = 80;
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return "";
@@ -148,13 +161,15 @@ export function streamClassicGstDocumentPdf(
     str: string,
     x: number,
     y: number,
-    opts: { width?: number; align?: "left" | "right" | "center"; bold?: boolean; size?: number; color?: string } = {}
+    opts: { width?: number; align?: "left" | "right" | "center"; bold?: boolean; size?: number; color?: string; maxH?: number } = {}
   ) {
     doc
       .font(opts.bold ? "Helvetica-Bold" : "Helvetica")
       .fontSize(opts.size ?? 8)
       .fillColor(opts.color ?? INK)
-      .text(str, x, y, { width: opts.width, align: opts.align, lineBreak: opts.width !== undefined });
+      // maxH clips a value that would wrap past its grid cell (with an ellipsis)
+      // instead of letting it run over the next row's label.
+      .text(str, x, y, { width: opts.width, align: opts.align, lineBreak: opts.width !== undefined, height: opts.maxH, ellipsis: opts.maxH !== undefined });
   }
 
   function newPage() {
@@ -166,7 +181,10 @@ export function streamClassicGstDocumentPdf(
   /** Returns true if a new page was started, so callers that need to
    * re-draw a repeating header (the item table's column header) know to. */
   function ensureSpace(height: number): boolean {
-    if (state.y + height > BOTTOM_LIMIT) {
+    // The 0.5pt tolerance matters: the flexible items box is sized so the last
+    // section ends exactly at BOTTOM_LIMIT, and float rounding must not read
+    // that exact fit as an overflow and push the signature to a new page.
+    if (state.y + height > BOTTOM_LIMIT + 0.5) {
       newPage();
       return true;
     }
@@ -174,60 +192,33 @@ export function streamClassicGstDocumentPdf(
   }
 
   // ============================================================
-  // Section A: company / buyer / reference grid - one bordered box,
-  // FIXED total height 225.4 (measured off the sample), split into a left
-  // column (company block 116.1 + buyer block 109.3) and a right 7-row
-  // reference grid (325.4 wide). All measurements below are the sample's
-  // own, not derived from this document's content.
+  // Section A: letterhead, then Buyer (left) beside the 7-row reference grid
+  // (right) - one bordered box. The letterhead (shared with the other classic
+  // templates, see letterhead.ts) replaces the plain company text block the
+  // sample carries; the grid keeps the sample's row proportions, scaled down
+  // (GRID_SCALE) to pay for the letterhead's height, and the items table
+  // below flexes to fill whatever page is left.
   // ============================================================
-  const HEADER_H = 225.4;
+  const GRID_SCALE = 0.84;
+  const GRID_ROW_H = [29.9, 30.4, 30.4, 25.4, 30.4, 37.7, 41.2].map((h) => h * GRID_SCALE);
+  const HEADER_H = GRID_ROW_H.reduce((a, b) => a + b, 0);
   const HEADER_LEFT_W = 191.1;
   const HEADER_RIGHT_X = CONTENT_LEFT + HEADER_LEFT_W;
   const HEADER_RIGHT_W = CONTENT_WIDTH - HEADER_LEFT_W;
   const HEADER_RIGHT_COL_A_W = 158.8;
-  const COMPANY_BLOCK_H = 116.1;
-  const BUYER_BLOCK_H = 109.3;
-  const GRID_ROW_H = [29.9, 30.4, 30.4, 25.4, 30.4, 37.7, 41.2]; // sums to 225.4
 
   function drawHeaderSection() {
     const pad = 6;
+    state.y = drawLetterhead(doc, { company, template, title, left: CONTENT_LEFT, width: CONTENT_WIDTH, top: state.y, minHeight: 96 });
     ensureSpace(HEADER_H);
     const boxY = state.y;
 
     rect(CONTENT_LEFT, boxY, HEADER_LEFT_W, HEADER_H);
     rect(HEADER_RIGHT_X, boxY, HEADER_RIGHT_W, HEADER_H);
-    hLine(CONTENT_LEFT, HEADER_RIGHT_X, boxY + COMPANY_BLOCK_H); // company/buyer divider
 
-    // -- Left column: company block (fixed 116.1), then buyer block (109.3).
-    // Text top-aligns within each fixed box at the sample's own LINE_H -
-    // leftover space at the bottom is expected, not a bug (the sample does
-    // the same for a short address).
-    const addrLines = [company.address, company.gstin ? `GSTIN/UIN: ${company.gstin}` : null].filter(Boolean) as string[];
-    const stateLine = [company.state ? `State: ${company.state}` : null, company.state_code ? `Code: ${company.state_code}` : null]
-      .filter(Boolean)
-      .join("   ");
-
-    // Company/Buyer text runs noticeably larger than the reference grid's
-    // dense label/value pairs, and at a taller line pitch than LINE_H, so
-    // these two blocks actually use their generous fixed height (116.1 /
-    // 109.3) instead of leaving most of it blank.
-    const HEADER_TEXT_LINE_H = 18.5;
+    // -- Left column: the Buyer, top-aligned in the full-height box.
+    const HEADER_TEXT_LINE_H = 17;
     const innerW = HEADER_LEFT_W - pad * 2;
-    let ly = boxY + 4;
-    text(company.name, CONTENT_LEFT + pad, ly, { bold: true, size: 13, width: innerW });
-    ly += HEADER_TEXT_LINE_H;
-    doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
-    for (const line of addrLines) {
-      doc.text(line, CONTENT_LEFT + pad, ly, { width: innerW });
-      // A wrapped line (a long address) needs more than one line's worth
-      // of room, or the next line crowds right into its second row.
-      ly += Math.max(HEADER_TEXT_LINE_H, doc.heightOfString(line, { width: innerW }) + 4);
-    }
-    if (stateLine) {
-      doc.text(stateLine, CONTENT_LEFT + pad, ly, { width: innerW });
-      ly += HEADER_TEXT_LINE_H;
-    }
-
     const buyerAddrLines = [
       customer.billing_address || "",
       customer.gstin ? `GSTIN/UIN: ${customer.gstin}` : "",
@@ -235,11 +226,11 @@ export function streamClassicGstDocumentPdf(
       document.place_of_supply ? `Place of Supply: ${document.place_of_supply}` : "",
     ].filter(Boolean);
 
-    let by = boxY + COMPANY_BLOCK_H + 4;
-    text("Buyer (Bill to)", CONTENT_LEFT + pad, by, { bold: true, size: 9, color: MUTED, width: HEADER_LEFT_W - pad * 2 });
+    let by = boxY + 5;
+    text("Buyer (Bill to)", CONTENT_LEFT + pad, by, { bold: true, size: 9, color: MUTED, width: innerW });
     by += HEADER_TEXT_LINE_H;
-    text(customer.name, CONTENT_LEFT + pad, by, { bold: true, size: 12, width: HEADER_LEFT_W - pad * 2 });
-    by += HEADER_TEXT_LINE_H;
+    text(customer.name, CONTENT_LEFT + pad, by, { bold: true, size: 12, width: innerW });
+    by += Math.max(HEADER_TEXT_LINE_H, doc.heightOfString(customer.name, { width: innerW }) + 4);
     doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
     for (const line of buyerAddrLines) {
       doc.text(line, CONTENT_LEFT + pad, by, { width: innerW });
@@ -269,17 +260,17 @@ export function streamClassicGstDocumentPdf(
       if (idx > 0) hLine(HEADER_RIGHT_X, HEADER_RIGHT_X + HEADER_RIGHT_W, ry);
       if (row.length === 4) {
         const [l1, v1, l2, v2] = row;
-        text(l1, HEADER_RIGHT_X + pad, ry + 3, { size: 7, color: MUTED, width: HEADER_RIGHT_COL_A_W - pad * 2 });
-        text(v1, HEADER_RIGHT_X + pad, ry + 12, { size: 8, width: HEADER_RIGHT_COL_A_W - pad * 2, align: valueAlign });
+        text(l1, HEADER_RIGHT_X + pad, ry + 2.5, { size: 7, color: MUTED, width: HEADER_RIGHT_COL_A_W - pad * 2 });
+        text(v1, HEADER_RIGHT_X + pad, ry + 11, { size: 8, width: HEADER_RIGHT_COL_A_W - pad * 2, align: valueAlign, maxH: h - 12 });
         vLine(HEADER_RIGHT_X + HEADER_RIGHT_COL_A_W, ry, ry + h);
         const bx = HEADER_RIGHT_X + HEADER_RIGHT_COL_A_W;
         const bw = HEADER_RIGHT_W - HEADER_RIGHT_COL_A_W;
-        text(l2, bx + pad, ry + 3, { size: 7, color: MUTED, width: bw - pad * 2 });
-        text(v2, bx + pad, ry + 12, { size: 8, width: bw - pad * 2, align: valueAlign });
+        text(l2, bx + pad, ry + 2.5, { size: 7, color: MUTED, width: bw - pad * 2 });
+        text(v2, bx + pad, ry + 11, { size: 8, width: bw - pad * 2, align: valueAlign, maxH: h - 12 });
       } else {
         const [l1, v1] = row;
-        text(l1, HEADER_RIGHT_X + pad, ry + 3, { size: 7, color: MUTED, width: HEADER_RIGHT_W - pad * 2 });
-        text(v1, HEADER_RIGHT_X + pad, ry + 12, { size: 8, width: HEADER_RIGHT_W - pad * 2 });
+        text(l1, HEADER_RIGHT_X + pad, ry + 2.5, { size: 7, color: MUTED, width: HEADER_RIGHT_W - pad * 2 });
+        text(v1, HEADER_RIGHT_X + pad, ry + 11, { size: 8, width: HEADER_RIGHT_W - pad * 2, maxH: h - 12 });
       }
       ry += h;
     });
@@ -296,7 +287,7 @@ export function streamClassicGstDocumentPdf(
   // (no separate "per" column).
   // ============================================================
   const ITEM_HEADER_H = 21.1;
-  const ITEM_BODY_MIN_H = 232.2;
+  const ITEM_BODY_MIN_H = 100;
   const ITEM_TOTAL_ROW_H = 15.2;
   // Bottom-anchored summary lines (subtotal + tax) inside the body sit at
   // these fixed offsets above the body's bottom edge in the sample -
@@ -372,7 +363,30 @@ export function streamClassicGstDocumentPdf(
     return Math.max(LINE_H, descHeight + 8);
   });
   const itemsNaturalH = itemRowHeights.reduce((a, b) => a + b, 0);
-  const bodyH = Math.max(ITEM_BODY_MIN_H, itemsNaturalH + summaryBlockH + 20);
+
+  // The items box fills whatever page height is left once every section below
+  // it has its (fixed or measured) height - the same heights those sections
+  // compute again when they draw. Only the tall sample layout's spirit
+  // survives the letterhead: a short invoice still fills the page.
+  const belowBodyH = (() => {
+    const wordsText = `Amount Chargeable (in words): ${amountInWords(grandTotal)}`;
+    const wordsH = Math.max(WORDS_H, doc.font("Helvetica-Bold").fontSize(8.5).heightOfString(wordsText, { width: CONTENT_WIDTH - 90 }) + 12);
+    const hsnRows = Math.max(2, groupByHsn(items, isInterState).length);
+    const hsnH = HSN_GROUP_HEADER_H + HSN_SUBHEADER_H + HSN_ROW_H * (hsnRows + 1);
+    const declText =
+      document.terms_and_conditions ||
+      company.terms_and_conditions ||
+      "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.";
+    const bankRowCount = template.showBankDetails ? [company.bank_name, company.bank_account_no, company.bank_ifsc].filter(Boolean).length : 0;
+    const declH = Math.max(
+      DECL_BANK_H,
+      doc.font("Helvetica").fontSize(7.8).heightOfString(declText, { width: CONTENT_WIDTH / 2 - 16 }) + 24,
+      15 + bankRowCount * 13
+    );
+    return ITEM_TOTAL_ROW_H + wordsH + hsnH + declH + (template.showSignatureBlock ? SIGNATURE_H : 0);
+  })();
+  const fillH = BOTTOM_LIMIT - state.y - belowBodyH;
+  const bodyH = Math.max(ITEM_BODY_MIN_H, itemsNaturalH + summaryBlockH + 20, fillH);
 
   if (ensureSpace(bodyH + ITEM_TOTAL_ROW_H)) {
     drawTableHeader();
@@ -434,7 +448,6 @@ export function streamClassicGstDocumentPdf(
   // Section C: amount in words + E.&O.E - fixed height 30.4, immediately
   // below the item table (no gap), matching the sample exactly.
   // ============================================================
-  const WORDS_H = 30.4;
   {
     // amountInWords() already returns "Rupees ... Only" - no separate
     // "INR"/"Only" wrapping needed.
@@ -460,9 +473,6 @@ export function streamClassicGstDocumentPdf(
   // with a blank row when there's only one HSN/tax-rate group), the same
   // fixed-row-count convention the sample itself uses.
   // ============================================================
-  const HSN_GROUP_HEADER_H = 14.7;
-  const HSN_SUBHEADER_H = 15.2;
-  const HSN_ROW_H = 15.2;
   {
     const groups = groupByHsn(items, isInterState);
     // Column widths lifted directly from the sample's own measured HSN
@@ -560,7 +570,6 @@ export function streamClassicGstDocumentPdf(
   // ============================================================
   // Section E: Declaration + Bank Details - fixed height 56.8.
   // ============================================================
-  const DECL_BANK_H = 56.8;
   {
     const declarationText = (document.terms_and_conditions || company.terms_and_conditions) ||
       "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.";
@@ -616,7 +625,6 @@ export function streamClassicGstDocumentPdf(
   // Section F: Signature - fixed height 91.1, the large signature area
   // the sample reserves at the very bottom of the page.
   // ============================================================
-  const SIGNATURE_H = 91.1;
   if (template.showSignatureBlock) {
     const h = SIGNATURE_H;
     ensureSpace(h);

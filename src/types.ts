@@ -150,6 +150,12 @@ export interface DocumentItem {
   discount_percent: number;
   tax_rate: number;
   line_total: number;
+  /** Measured (area-billed) lines: qty = height*length*pieces - see salesDocuments.ts. */
+  height?: number | null;
+  length?: number | null;
+  pieces?: number | null;
+  /** "item" (numbered), "heading" (numbered group title, no amounts) or "sub" (un-numbered, under a heading). */
+  line_kind?: "item" | "heading" | "sub";
 }
 
 export interface DocumentRecord {

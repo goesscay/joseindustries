@@ -26,11 +26,12 @@ export type TemplateDocType = (typeof TEMPLATE_DOC_TYPES)[number];
  * look (documentPdf.ts/receiptPdf.ts); "classic_gst" is a Tally-style
  * Indian GST Tax Invoice format matching a customer-supplied sample
  * (classicGstDocumentPdf.ts); "classic_quotation" is the client's own
- * Quotation sheet (classicQuotationPdf.ts). New styles register here, in
+ * Quotation sheet (classicQuotationPdf.ts); "classic_measured" is the client's measured-area
+ * invoice sheet (same file). New styles register here, in
  * TEMPLATE_STYLE_DOC_TYPES below, and in the one branch each PDF route
  * uses to pick a renderer.
  */
-export const TEMPLATE_STYLES = ["classic_gst", "modern", "classic_quotation"] as const;
+export const TEMPLATE_STYLES = ["classic_gst", "modern", "classic_quotation", "classic_measured"] as const;
 export type TemplateStyle = (typeof TEMPLATE_STYLES)[number];
 
 /** Which document types each style can actually draw - a style is only
@@ -41,6 +42,9 @@ export const TEMPLATE_STYLE_DOC_TYPES: Record<TemplateStyle, readonly TemplateDo
   classic_gst: ["quotation", "proforma_invoice", "delivery_challan", "tax_invoice"],
   modern: TEMPLATE_DOC_TYPES,
   classic_quotation: ["quotation"],
+  // The client's measured (Height x Length = Sq.Ft) invoice sheet - offered
+  // on the two invoice types.
+  classic_measured: ["proforma_invoice", "tax_invoice"],
 };
 
 export function stylesForDocType(docType: TemplateDocType): TemplateStyle[] {

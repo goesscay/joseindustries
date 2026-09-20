@@ -1,26 +1,31 @@
-import path from "path";
 import PDFDocument from "pdfkit";
 import { Response } from "express";
 import { Company, Customer, DocumentItem, DocumentRecord } from "../../types";
 import { EffectiveDocumentTemplate } from "../documentTemplates";
+import { drawLetterhead } from "./letterhead";
 
-// "classic_quotation" style - the client's own Quotation sheet
-// (QuotationTemplate.xlsx), reproduced section for section: Buyer block with
-// Date / Quotation Number / Other Reference on the right, a
-// SN.No | DESCRIPTION | Qty | Rate | Amount item table, a Total / Transport /
-// Handling / Grand Total block under it, a "Terms & Condition" table
-// (Offer Valid, Payment Terms, Delivery Period, GST, Packing and
-// forwarding), Declaration next to Company's Bank Details, and a signature
-// row. Column proportions, row heights and the left/right split all come
-// from measuring that sheet rendered to PDF. The one deliberate departure is
-// the header: the sheet's own header is clipped and overlaps its logo, so it
-// is redrawn as a proper letterhead (logo + company name + address/contact
-// lines + a QUOTATION title band) - everything below it follows the sheet.
+// Two of the client's own Excel sheets share this one renderer, because they
+// are the same sheet apart from the item table:
 //
-// The items area is a tall FLEXIBLE box: it fills whatever page height is
-// left after the fixed-size sections, so a one-line quotation still fills the
-// A4 page the way the sheet does, and many lines paginate (with the column
-// header repeated) instead of overflowing.
+//  * "quotation" (QuotationTemplate.xlsx): SN.No | DESCRIPTION | Qty | Rate |
+//    Amount, item rows drawn without inner grid lines.
+//  * "measured" (InvoiceTemplate.xlsx, used for invoices billed by area):
+//    SN.No | DESCRIPTION | Height | Length | QTY | SqFt/Area | Rate | Amount,
+//    every row gridded, group headings (a numbered row with no amounts, tinted)
+//    with un-numbered sub-lines under them.
+//
+// Both then continue identically: a Total / (Transport, GST) / Grand Total
+// block under the Rate and Amount columns, a "Terms & Condition" table,
+// Declaration beside Company's Bank Details, and a signature row. Proportions
+// come from measuring the sheets rendered to PDF. The header is the shared
+// letterhead (see letterhead.ts) instead of the sheets' own clipped one.
+//
+// The items area is a tall FLEXIBLE box that fills whatever page height is
+// left after the fixed-size sections, so a short document still fills the A4
+// page the way the sheets do, and long ones paginate (column header repeated)
+// with the footer sections flush to the bottom of the last page.
+
+export type SheetVariant = "quotation" | "measured";
 
 const PAGE_WIDTH = 595.28; // A4
 const PAGE_HEIGHT = 841.89;
@@ -30,34 +35,34 @@ const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 const CONTENT_RIGHT = CONTENT_LEFT + CONTENT_WIDTH;
 const BOTTOM_LIMIT = PAGE_HEIGHT - PAGE_MARGIN - 8;
 
-const LOGO_PATH = path.join(__dirname, "../../../client/src/assets/logo-black.png");
-const LOGO_NATURAL_WIDTH = 493;
-const LOGO_NATURAL_HEIGHT = 125;
-const LOGO_ICON_FRACTION = 0.4; // share of the artwork that is the icon mark, left of the wordmark
-
 const INK = "#000000";
 const MUTED = "#444444";
+const HEADING_TINT = "#FFF3B0"; // the measured sheet highlights group headings yellow
 
-// Column proportions measured off the sheet (541pt wide there), rescaled to
-// this page's content width.
-const SHEET_W = 541;
-const COL_SHEET = { sno: 45.5, desc: 254.2, qty: 92.7, rate: 73.7, amount: 74.9 };
-const COLS = (() => {
+// Column proportions measured off each sheet (in the sheet's own units),
+// rescaled to this page's content width.
+const SHEET_COLS: Record<SheetVariant, Record<string, number>> = {
+  quotation: { sno: 45.5, desc: 254.2, qty: 92.7, rate: 73.7, amount: 74.9 },
+  measured: { sno: 35.2, desc: 289.4, height: 59.3, length: 57, pieces: 53.8, area: 101.5, rate: 66.2, amount: 84 },
+};
+
+type Col = { x: number; width: number };
+
+function buildCols(variant: SheetVariant): Record<string, Col> {
+  const src = SHEET_COLS[variant];
+  const total = Object.values(src).reduce((a, b) => a + b, 0);
+  const keys = Object.keys(src);
+  const out: Record<string, Col> = {};
   let x = CONTENT_LEFT;
-  const out = {} as Record<keyof typeof COL_SHEET, { x: number; width: number }>;
-  const keys = Object.keys(COL_SHEET) as (keyof typeof COL_SHEET)[];
   keys.forEach((k, i) => {
-    const width = i === keys.length - 1 ? CONTENT_RIGHT - x : (COL_SHEET[k] * CONTENT_WIDTH) / SHEET_W;
+    const width = i === keys.length - 1 ? CONTENT_RIGHT - x : (src[k] * CONTENT_WIDTH) / total;
     out[k] = { x, width };
     x += width;
   });
   return out;
-})();
-const SPLIT_X = COLS.qty.x; // left | right divider of the Buyer/Declaration/Signature blocks
-const TERMS_LABEL_W = (104.5 * CONTENT_WIDTH) / SHEET_W;
+}
 
-// Section heights measured off the sheet.
-const TITLE_H = 26;
+// Section heights measured off the sheets.
 const INFO_MIN_H = 82.7;
 const ITEMS_HEADER_H = 26.6;
 const TOTAL_ROW_H = 15;
@@ -65,6 +70,7 @@ const TERMS_TITLE_H = 18;
 const TERM_ROW_MIN_H = 20;
 const DECL_BANK_MIN_H = 66;
 const SIGNATURE_H = 84;
+const TERMS_LABEL_W = (104.5 * CONTENT_WIDTH) / 541;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -79,8 +85,18 @@ function formatMoney(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** A dimension/area figure: up to `max` decimals, trailing zeros trimmed
+ * (26.125 stays 26.125, 33.64 stays 33.64, 10.50 becomes 10.5). */
+function trimNumber(n: number, max = 3): string {
+  return String(Number(n.toFixed(max)));
+}
+
+function hasValue(v: unknown): boolean {
+  return v !== null && v !== undefined && Number(v) > 0;
+}
+
 /** Rows of the Terms & Condition table. `label` null = a free-text line that
- * spans the whole row. Order and labels follow the sheet; a row is only
+ * spans the whole row. Order and labels follow the sheets; a row is only
  * printed when there is something to say (GST always is). */
 function buildTermsRows(document: DocumentRecord, company: Company, items: DocumentItem[]): { label: string | null; value: string }[] {
   const text = (document.terms_and_conditions || company.terms_and_conditions || "").trim();
@@ -102,7 +118,7 @@ function buildTermsRows(document: DocumentRecord, company: Company, items: Docum
     return hit.value;
   };
 
-  const rates = Array.from(new Set(items.map((i) => Number(i.tax_rate)).filter((r) => r > 0))).sort((a, b) => a - b);
+  const rates = Array.from(new Set(items.filter((i) => i.line_kind !== "heading").map((i) => Number(i.tax_rate)).filter((r) => r > 0))).sort((a, b) => a - b);
   const gst = rates.length ? `${rates.join("% / ")}% GST Extra` : "Not applicable";
 
   const rows: { label: string | null; value: string }[] = [
@@ -117,7 +133,8 @@ function buildTermsRows(document: DocumentRecord, company: Company, items: Docum
   return rows;
 }
 
-export function streamClassicQuotationPdf(
+function streamSheetPdf(
+  variant: SheetVariant,
   res: Response,
   title: string,
   document: DocumentRecord,
@@ -126,12 +143,22 @@ export function streamClassicQuotationPdf(
   company: Company,
   template: EffectiveDocumentTemplate
 ) {
+  const measured = variant === "measured";
+  const COLS = buildCols(variant);
+  // The left | right divider of the Buyer / Declaration / Signature blocks, and
+  // where the right-hand block's value column starts.
+  const SPLIT_X = measured ? COLS.pieces.x : COLS.qty.x;
+  const INFO_VALUE_X = COLS.rate.x;
+  // Where the totals block's label cell starts: the measured sheet's Rate column
+  // is too narrow for "Grand Total", so its labels span SqFt/Area + Rate.
+  const TOTALS_LABEL_X = measured ? COLS.area.x : COLS.rate.x;
+  const dividerKeys = Object.keys(COLS).slice(1); // every column edge except the table's left edge
+
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN, bufferPages: true });
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${document.doc_number.replace(/\//g, "-")}.pdf"`);
   doc.pipe(res);
 
-  const ACCENT = template.accentColor;
   const state = { y: PAGE_MARGIN };
 
   const subtotal = Number(document.subtotal);
@@ -141,6 +168,7 @@ export function streamClassicQuotationPdf(
   const cgstTotal = Number(document.cgst_total);
   const sgstTotal = Number(document.sgst_total);
   const igstTotal = Number(document.igst_total);
+  const taxTotal = Number(document.tax_total);
   const roundOff = Number(document.round_off);
   const grandTotal = Number(document.grand_total);
   const isInterState = igstTotal > 0;
@@ -176,69 +204,13 @@ export function streamClassicQuotationPdf(
   function cellText(str: string, x: number, top: number, w: number, h: number, opts: Parameters<typeof text>[4] = {}) {
     text(str, x, top + (h - (opts.size ?? 9.5)) / 2, w, opts);
   }
+  function fillRect(x: number, y: number, w: number, h: number, color: string) {
+    doc.save().rect(x, y, w, h).fill(color).restore();
+  }
 
   function newPage() {
     doc.addPage();
     state.y = PAGE_MARGIN;
-  }
-
-  // ============================================================
-  // Letterhead + title band (redesigned - see file header)
-  // ============================================================
-  function drawHeader() {
-    const top = state.y;
-    const innerW = CONTENT_WIDTH - 40;
-    const name = company.name.toUpperCase();
-
-    const iconH = 40;
-    const iconW = template.showLogo ? LOGO_ICON_FRACTION * LOGO_NATURAL_WIDTH * (iconH / LOGO_NATURAL_HEIGHT) : 0;
-    let nameSize = 26;
-    doc.font("Helvetica-Bold").fontSize(nameSize);
-    while (doc.widthOfString(name) + iconW + 12 > innerW && nameSize > 14) {
-      nameSize -= 1;
-      doc.fontSize(nameSize);
-    }
-    const nameW = doc.widthOfString(name);
-    const groupW = nameW + (iconW ? iconW + 12 : 0);
-    const startX = CONTENT_LEFT + (CONTENT_WIDTH - groupW) / 2;
-    const rowTop = top + 12;
-
-    if (iconW) {
-      try {
-        doc.save();
-        doc.rect(startX, rowTop, iconW, iconH).clip();
-        doc.image(LOGO_PATH, startX, rowTop, { height: iconH });
-        doc.restore();
-      } catch {
-        // Logo file missing - skip silently rather than fail PDF generation.
-      }
-    }
-    text(name, startX + (iconW ? iconW + 12 : 0), rowTop + (iconH - nameSize) / 2 - 1, nameW + 4, { bold: true, size: nameSize, color: ACCENT });
-
-    let cy = rowTop + iconH + 8;
-    const centered = (str: string, size: number, opts: { italic?: boolean; bold?: boolean } = {}) => {
-      const h = measure(str, innerW, size, opts.bold);
-      text(str, CONTENT_LEFT + 20, cy, innerW, { align: "center", size, color: MUTED, ...opts });
-      cy += h + 3;
-    };
-    if (company.tagline) centered(company.tagline, 9, { italic: true });
-    if (company.address) centered(company.address, 9.5);
-    const contact = [company.phone ? `Phone : ${company.phone}` : "", company.email ? `Email : ${company.email}` : ""].filter(Boolean).join("     |     ");
-    if (contact) centered(contact, 9.5);
-    const ids = [company.gstin ? `GSTIN : ${company.gstin}` : "", company.state ? `State : ${company.state}` : ""].filter(Boolean).join("     |     ");
-    if (ids) centered(ids, 9.5, { bold: true });
-
-    const headerH = Math.max(112, cy - top + 8);
-    rect(CONTENT_LEFT, top, CONTENT_WIDTH, headerH);
-
-    // Title band
-    const bandTop = top + headerH;
-    rect(CONTENT_LEFT, bandTop, CONTENT_WIDTH, TITLE_H);
-    cellText(title.toUpperCase(), CONTENT_LEFT, bandTop, CONTENT_WIDTH, TITLE_H, { align: "center", bold: true, size: 14, color: ACCENT });
-    if (template.headerLabel) {
-      cellText(template.headerLabel, CONTENT_LEFT, bandTop, CONTENT_WIDTH - 10, TITLE_H, { align: "right", italic: true, size: 8.5, color: MUTED });
-    }
-    state.y = bandTop + TITLE_H;
   }
 
   // ============================================================
@@ -265,8 +237,7 @@ export function streamClassicQuotationPdf(
     text(`GSTIN : ${customer.gstin || ""}`, CONTENT_LEFT + pad, top + h - 20, innerW, { size: 9.5 });
 
     // Right block: label | value, three equal rows.
-    const valueX = COLS.rate.x;
-    vLine(valueX, top, top + h);
+    vLine(INFO_VALUE_X, top, top + h);
     const rows: [string, string][] = [
       ["Date:", formatDate(document.issue_date)],
       [`${title} No.:`, document.doc_number],
@@ -276,8 +247,8 @@ export function streamClassicQuotationPdf(
     rows.forEach(([label, value], i) => {
       const y = top + i * rowH;
       if (i > 0) hLine(SPLIT_X, CONTENT_RIGHT, y);
-      cellText(label, SPLIT_X + 7, y, COLS.qty.width - 10, rowH, { bold: true, size: 9.5 });
-      cellText(value, valueX, y, CONTENT_RIGHT - valueX, rowH, { align: "center", bold: i === 0, size: 10 });
+      cellText(label, SPLIT_X + 7, y, INFO_VALUE_X - SPLIT_X - 10, rowH, { bold: true, size: 9.5 });
+      cellText(value, INFO_VALUE_X, y, CONTENT_RIGHT - INFO_VALUE_X, rowH, { align: "center", bold: i === 0, size: 10 });
     });
     state.y = top + h;
   }
@@ -288,46 +259,102 @@ export function streamClassicQuotationPdf(
   function drawItemsHeader() {
     const top = state.y;
     rect(CONTENT_LEFT, top, CONTENT_WIDTH, ITEMS_HEADER_H);
-    (["desc", "qty", "rate", "amount"] as const).forEach((k) => vLine(COLS[k].x, top, top + ITEMS_HEADER_H));
-    const opts = { align: "center" as const, bold: true, size: 10 };
-    cellText("SN.No", COLS.sno.x, top, COLS.sno.width, ITEMS_HEADER_H, { ...opts, size: 8.5 });
-    cellText("DESCRIPTION", COLS.desc.x, top, COLS.desc.width, ITEMS_HEADER_H, opts);
-    cellText("Qty", COLS.qty.x, top, COLS.qty.width, ITEMS_HEADER_H, opts);
-    cellText("Rate", COLS.rate.x, top, COLS.rate.width, ITEMS_HEADER_H, opts);
-    cellText("Amount", COLS.amount.x, top, COLS.amount.width, ITEMS_HEADER_H, opts);
+    dividerKeys.forEach((k) => vLine(COLS[k].x, top, top + ITEMS_HEADER_H));
+    const opts = { align: "center" as const, bold: true, size: measured ? 9 : 10 };
+    const labels: Record<string, string> = measured
+      ? { sno: "S.No", desc: "DESCRIPTION", height: "Height", length: "Length", pieces: "QTY", area: "SqFt/Area", rate: "Rate", amount: "Amount" }
+      : { sno: "SN.No", desc: "DESCRIPTION", qty: "Qty", rate: "Rate", amount: "Amount" };
+    Object.keys(COLS).forEach((k) => {
+      cellText(labels[k], COLS[k].x, top, COLS[k].width, ITEMS_HEADER_H, k === "sno" ? { ...opts, size: measured ? 7.5 : 8.5 } : opts);
+    });
     state.y = top + ITEMS_HEADER_H;
   }
 
-  const descW = COLS.desc.width - 14;
-  const rowHeights = items.map((it) => Math.max(22, measure(it.description, descW, 9.5) + 14));
+  const descPad = 7;
+  const descW = COLS.desc.width - descPad * 2;
+  const rowHeights = items.map((it) => {
+    const size = measured ? 9 : 9.5;
+    const extra = measured ? 8 : 14;
+    const h = measure(it.description, descW - (it.line_kind === "sub" ? 8 : 0), size, it.line_kind === "heading") + extra;
+    return Math.max(measured ? 19 : 22, h);
+  });
+
+  // Serial numbers: numbered rows ("item" and "heading") count up; "sub" lines
+  // under a heading stay un-numbered. The quotation sheet numbers everything.
+  const serials: (string | null)[] = [];
+  {
+    let n = 0;
+    for (const it of items) {
+      if (measured && it.line_kind === "sub") serials.push(null);
+      else serials.push(measured ? `${String(++n).padStart(2, "0")}.` : `${++n}.`);
+    }
+  }
 
   function drawItemRows(from: number, to: number, top: number) {
     let y = top;
     for (let i = from; i < to; i++) {
       const it = items[i];
+      const h = rowHeights[i];
+      const isHeading = it.line_kind === "heading";
       const base = it.qty * it.rate;
       const lineTaxable = base - (base * (it.discount_percent || 0)) / 100;
-      const ty = y + 7;
-      text(`${i + 1}.`, COLS.sno.x, ty, COLS.sno.width, { align: "center" });
-      text(it.description, COLS.desc.x + 7, ty, descW);
-      text(`${it.qty} ${it.unit}`, COLS.qty.x, ty, COLS.qty.width, { align: "center" });
-      text(formatMoney(it.rate), COLS.rate.x, ty, COLS.rate.width - 6, { align: "right" });
-      text(formatMoney(lineTaxable), COLS.amount.x, ty, COLS.amount.width - 6, { align: "right" });
-      y += rowHeights[i];
+
+      if (measured) {
+        if (isHeading) fillRect(COLS.desc.x, y, CONTENT_RIGHT - COLS.desc.x, h, HEADING_TINT);
+        // Every row of the measured sheet is gridded.
+        rect(CONTENT_LEFT, y, CONTENT_WIDTH, h);
+        dividerKeys.forEach((k) => vLine(COLS[k].x, y, y + h));
+      }
+      const ty = y + (measured ? 5 : 7);
+      const size = measured ? 9 : 9.5;
+      if (serials[i]) text(serials[i]!, COLS.sno.x, ty, COLS.sno.width, { align: "center", size });
+      const sub = it.line_kind === "sub";
+      text(it.description, COLS.desc.x + descPad + (sub ? 8 : 0), ty, descW - (sub ? 8 : 0), { size, bold: isHeading });
+
+      if (!isHeading) {
+        if (measured) {
+          const hasDims = hasValue(it.height) && hasValue(it.length);
+          if (hasDims) {
+            text(Number(it.height).toFixed(2), COLS.height.x, ty, COLS.height.width, { align: "center", size });
+            text(Number(it.length).toFixed(2), COLS.length.x, ty, COLS.length.width, { align: "center", size });
+            text(trimNumber(Number(it.pieces) || 1, 2), COLS.pieces.x, ty, COLS.pieces.width, { align: "center", size });
+            text(trimNumber(it.qty), COLS.area.x, ty, COLS.area.width, { align: "center", size });
+          } else {
+            // A plain quantity line on a measured invoice: no dimensions to show.
+            text(`${trimNumber(it.qty, 2)} ${it.unit}`, COLS.pieces.x - 12, ty, COLS.pieces.width + 24, { align: "center", size: 8.5 });
+          }
+          text(formatMoney(it.rate), COLS.rate.x, ty, COLS.rate.width - 6, { align: "center", size });
+          text(formatMoney(lineTaxable), COLS.amount.x, ty, COLS.amount.width - 5, { align: "right", size });
+        } else {
+          text(`${trimNumber(it.qty, 2)} ${it.unit}`, COLS.qty.x, ty, COLS.qty.width, { align: "center", size });
+          text(formatMoney(it.rate), COLS.rate.x, ty, COLS.rate.width - 6, { align: "right", size });
+          text(formatMoney(lineTaxable), COLS.amount.x, ty, COLS.amount.width - 6, { align: "right", size });
+        }
+      }
+      y += h;
     }
   }
 
   // ---- everything that follows the item rows on the last page ----
   type TotalLine = { label: string; value: string; bold?: boolean };
+  const gstRates = Array.from(new Set(items.filter((i) => i.line_kind !== "heading").map((i) => Number(i.tax_rate)).filter((r) => r > 0)));
   const totalLines: TotalLine[] = [{ label: "Total", value: formatMoney(subtotal) }];
   if (discountAmount) totalLines.push({ label: "Discount", value: `-${formatMoney(discountAmount)}` });
-  totalLines.push({ label: "Transport", value: freightCharges ? formatMoney(freightCharges) : "" });
-  totalLines.push({ label: "Installation", value: installationCharges ? formatMoney(installationCharges) : "" });
-  if (isInterState) {
-    if (igstTotal) totalLines.push({ label: "IGST", value: formatMoney(igstTotal) });
+  if (measured) {
+    // The invoice sheet shows a single GST row; the CGST/SGST/IGST split is
+    // implied by the state details above.
+    if (taxTotal) totalLines.push({ label: gstRates.length === 1 ? `GST ${gstRates[0]}%` : "GST", value: formatMoney(taxTotal) });
+    totalLines.push({ label: "Transport", value: freightCharges ? formatMoney(freightCharges) : "" });
+    if (installationCharges) totalLines.push({ label: "Installation", value: formatMoney(installationCharges) });
   } else {
-    if (cgstTotal) totalLines.push({ label: "CGST", value: formatMoney(cgstTotal) });
-    if (sgstTotal) totalLines.push({ label: "SGST", value: formatMoney(sgstTotal) });
+    totalLines.push({ label: "Transport", value: freightCharges ? formatMoney(freightCharges) : "" });
+    totalLines.push({ label: "Installation", value: installationCharges ? formatMoney(installationCharges) : "" });
+    if (isInterState) {
+      if (igstTotal) totalLines.push({ label: "IGST", value: formatMoney(igstTotal) });
+    } else {
+      if (cgstTotal) totalLines.push({ label: "CGST", value: formatMoney(cgstTotal) });
+      if (sgstTotal) totalLines.push({ label: "SGST", value: formatMoney(sgstTotal) });
+    }
   }
   if (roundOff) totalLines.push({ label: "Round Off", value: formatMoney(roundOff) });
   totalLines.push({ label: "Grand Total", value: formatMoney(grandTotal), bold: true });
@@ -364,16 +391,16 @@ export function streamClassicQuotationPdf(
     let y = top;
 
     // Totals: label under the Rate column, value under Amount; the wide blank
-    // area to their left keeps just the outer border, like the sheet.
+    // area to their left keeps just the outer border, like the sheets.
     vLine(CONTENT_LEFT, y, y + totalsH);
     totalLines.forEach((line) => {
-      rect(COLS.rate.x, y, CONTENT_RIGHT - COLS.rate.x, TOTAL_ROW_H);
+      rect(TOTALS_LABEL_X, y, CONTENT_RIGHT - TOTALS_LABEL_X, TOTAL_ROW_H);
       vLine(COLS.amount.x, y, y + TOTAL_ROW_H);
-      cellText(line.label, COLS.rate.x, y, COLS.rate.width, TOTAL_ROW_H, { align: "center", bold: line.bold, size: 9 });
-      cellText(line.value, COLS.amount.x, y, COLS.amount.width - 6, TOTAL_ROW_H, { align: "right", bold: line.bold, size: 9 });
+      cellText(line.label, TOTALS_LABEL_X, y, COLS.amount.x - TOTALS_LABEL_X, TOTAL_ROW_H, { align: "center", bold: line.bold, size: 9 });
+      cellText(line.value, COLS.amount.x, y, COLS.amount.width - 5, TOTAL_ROW_H, { align: "right", bold: line.bold, size: 9 });
       y += TOTAL_ROW_H;
     });
-    hLine(CONTENT_LEFT, COLS.rate.x, y);
+    hLine(CONTENT_LEFT, TOTALS_LABEL_X, y);
 
     // Terms & Condition
     rect(CONTENT_LEFT, y, CONTENT_WIDTH, TERMS_TITLE_H);
@@ -428,12 +455,17 @@ export function streamClassicQuotationPdf(
   }
 
   // ============================================================
-  // Layout: header, info, then the items table paginated so the last page
+  // Layout: letterhead, info, then the items table paginated so the last page
   // always ends with the footer sections flush to the bottom.
   // ============================================================
-  drawHeader();
+  state.y = drawLetterhead(doc, { company, template, title, left: CONTENT_LEFT, width: CONTENT_WIDTH, top: state.y, minHeight: 112 });
   drawInfo();
   drawItemsHeader();
+
+  const drawBodyBox = (top: number, h: number) => {
+    rect(CONTENT_LEFT, top, CONTENT_WIDTH, h);
+    dividerKeys.forEach((k) => vLine(COLS[k].x, top, top + h));
+  };
 
   const MIN_GAP = 8;
   let idx = 0;
@@ -443,10 +475,19 @@ export function streamClassicQuotationPdf(
     if (remaining + MIN_GAP <= avail - footerH) {
       // Last page: the items box stretches so the footer ends at the bottom edge.
       const bodyH = avail - footerH;
-      rect(CONTENT_LEFT, state.y, CONTENT_WIDTH, bodyH);
-      (["desc", "qty", "rate", "amount"] as const).forEach((k) => vLine(COLS[k].x, state.y, state.y + bodyH));
+      drawBodyBox(state.y, bodyH);
       drawItemRows(idx, items.length, state.y);
       drawFooter(state.y + bodyH);
+      break;
+    }
+    // All rows fit on this page but the footer sections do not: keep the rows
+    // together here and start the footer on the next page, rather than
+    // dragging one lonely row over to a page that is otherwise empty.
+    if (remaining <= avail) {
+      drawBodyBox(state.y, avail);
+      drawItemRows(idx, items.length, state.y);
+      newPage();
+      drawFooter(state.y);
       break;
     }
     // Not the last page: take rows while they fit, extend the box to the page bottom.
@@ -456,11 +497,8 @@ export function streamClassicQuotationPdf(
       sum += rowHeights[idx + take];
       take++;
     }
-    if (idx + take >= items.length) take = Math.max(take - 1, 0); // never leave the footer alone on a page
     if (take === 0 && idx < items.length) take = 1; // a single over-tall row still has to go somewhere
-    const bodyH = avail;
-    rect(CONTENT_LEFT, state.y, CONTENT_WIDTH, bodyH);
-    (["desc", "qty", "rate", "amount"] as const).forEach((k) => vLine(COLS[k].x, state.y, state.y + bodyH));
+    drawBodyBox(state.y, avail);
     drawItemRows(idx, idx + take, state.y);
     idx += take;
     newPage();
@@ -485,4 +523,28 @@ export function streamClassicQuotationPdf(
   }
 
   doc.end();
+}
+
+export function streamClassicQuotationPdf(
+  res: Response,
+  title: string,
+  document: DocumentRecord,
+  items: DocumentItem[],
+  customer: Customer,
+  company: Company,
+  template: EffectiveDocumentTemplate
+) {
+  streamSheetPdf("quotation", res, title, document, items, customer, company, template);
+}
+
+export function streamClassicMeasuredPdf(
+  res: Response,
+  title: string,
+  document: DocumentRecord,
+  items: DocumentItem[],
+  customer: Customer,
+  company: Company,
+  template: EffectiveDocumentTemplate
+) {
+  streamSheetPdf("measured", res, title, document, items, customer, company, template);
 }
