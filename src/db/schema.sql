@@ -1501,3 +1501,19 @@ CREATE TABLE IF NOT EXISTS document_templates (
 -- (the new default) and 'modern' for Receipts (no classic_gst renderer
 -- exists for it).
 ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS template_style VARCHAR(30) NULL;
+
+-- Each document remembers which PDF template style it was created with
+-- (see documentTemplates.ts resolveTemplateStyle), so changing the style
+-- selected in Settings > Document Templates - or adding a brand new style,
+-- like the client's own Quotation sheet - only affects documents created
+-- afterwards, never ones that already exist. NULL only ever exists on rows
+-- older than this column; the one-time backfill below freezes each of those
+-- at whatever it would have rendered as up to now (that (company, doc_type)'s
+-- selected style, else the Tally-style invoice that was the default for
+-- every sales document type before this column existed), and is a no-op on
+-- every later run because new documents are always stamped at creation.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS template_style VARCHAR(30) NULL;
+UPDATE documents d
+  LEFT JOIN document_templates t ON t.company_id = d.company_id AND t.doc_type = d.doc_type
+  SET d.template_style = COALESCE(t.template_style, 'classic_gst')
+  WHERE d.template_style IS NULL;

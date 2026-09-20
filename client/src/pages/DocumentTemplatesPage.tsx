@@ -20,10 +20,13 @@ const DOC_TYPE_LABELS: Record<string, string> = {
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
-// Kept in sync with TEMPLATE_STYLES in src/services/documentTemplates.ts -
-// adding a new style there means adding its label here too.
+// Labels for the styles registered in src/services/documentTemplates.ts -
+// adding a new style there means adding its label here too. Which styles
+// each document type offers, and which is its default, come from the API
+// (available_styles / default_style), so this is only names.
 const TEMPLATE_STYLE_LABELS: Record<string, string> = {
   classic_gst: "Classic GST (Tally-style)",
+  classic_quotation: "Classic Quotation",
   modern: "Modern",
 };
 
@@ -67,16 +70,11 @@ export function DocumentTemplatesPage() {
     });
   }
 
-  /** What a doc type renders as when template_style is left null - matches
-   * each PDF route's own `defaults.templateStyle` argument. Doc types with
-   * no PDF export yet have no renderer to default to, so there's nothing
-   * meaningful to show. */
-  function defaultStyleLabel(docType: string): string {
-    if (docType === "receipt") return TEMPLATE_STYLE_LABELS.modern;
-    if (["quotation", "proforma_invoice", "delivery_challan", "tax_invoice"].includes(docType)) {
-      return TEMPLATE_STYLE_LABELS.classic_gst;
-    }
-    return "N/A";
+  /** What a doc type renders as when template_style is left null. Doc types
+   * with no PDF export yet have no renderer to default to. */
+  function defaultStyleLabel(record: DocumentTemplate): string {
+    if (!record.has_pdf || !record.default_style) return "N/A";
+    return TEMPLATE_STYLE_LABELS[record.default_style] || record.default_style;
   }
 
   async function handleSubmit() {
@@ -153,7 +151,7 @@ export function DocumentTemplatesPage() {
         r.template_style ? (
           TEMPLATE_STYLE_LABELS[r.template_style] || r.template_style
         ) : (
-          <Typography.Text type="secondary">default ({defaultStyleLabel(r.doc_type)})</Typography.Text>
+          <Typography.Text type="secondary">default ({defaultStyleLabel(r)})</Typography.Text>
         ),
     },
     {
@@ -237,17 +235,19 @@ export function DocumentTemplatesPage() {
           <Form.Item
             name="template_style"
             label="Template Style"
-            extra={editing ? `Leave blank to use this document's default (${defaultStyleLabel(editing.doc_type)}).` : undefined}
+            extra={editing ? `Leave blank to use this document's default (${defaultStyleLabel(editing)}).` : undefined}
           >
             <Select
               allowClear
               placeholder="Use the default"
-              options={Object.entries(TEMPLATE_STYLE_LABELS).map(([value, label]) => ({ value, label }))}
+              options={(editing?.available_styles ?? []).map((value) => ({ value, label: TEMPLATE_STYLE_LABELS[value] || value }))}
             />
           </Form.Item>
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: -8 }}>
-            Classic GST is a monochrome Tally-style layout: it never shows a logo image and ignores the accent color
-            and header label below, but still honors the bank details / signature toggles.
+            A document keeps the template that was selected when it was created - changing this only affects
+            documents created afterwards, never existing ones. Classic GST is monochrome: it never shows a logo image
+            and ignores the accent color and header label below, but still honors the bank details / signature
+            toggles.
           </Typography.Paragraph>
           <Form.Item name="show_logo" label="Show Company Logo" valuePropName="checked">
             <Switch />

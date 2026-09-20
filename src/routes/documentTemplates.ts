@@ -3,7 +3,16 @@ import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
-import { TEMPLATE_DOC_TYPES, TEMPLATE_DOC_TYPES_WITH_PDF, TEMPLATE_STYLES, TemplateDocType, TemplateStyle } from "../services/documentTemplates";
+import {
+  TEMPLATE_DOC_TYPES,
+  TEMPLATE_DOC_TYPES_WITH_PDF,
+  TEMPLATE_STYLES,
+  TemplateDocType,
+  defaultTemplateStyle,
+  isTemplateStyle,
+  stylesForDocType,
+  TEMPLATE_STYLE_DOC_TYPES,
+} from "../services/documentTemplates";
 import { DocumentTemplate } from "../types";
 
 export const documentTemplatesRouter = Router();
@@ -14,10 +23,6 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 function isTemplateDocType(v: unknown): v is TemplateDocType {
   return typeof v === "string" && (TEMPLATE_DOC_TYPES as readonly string[]).includes(v);
-}
-
-function isTemplateStyle(v: unknown): v is TemplateStyle {
-  return typeof v === "string" && (TEMPLATE_STYLES as readonly string[]).includes(v);
 }
 
 // One row per (company, doc_type) that currently has customized settings -
@@ -56,6 +61,11 @@ documentTemplatesRouter.get(
           created_at: existing?.created_at ?? null,
           updated_at: existing?.updated_at ?? null,
           has_pdf: (TEMPLATE_DOC_TYPES_WITH_PDF as readonly string[]).includes(docType),
+          // Styles this doc type can actually draw, and the one used when
+          // template_style is left null - so the client never has to
+          // duplicate the registry to offer/label the right choices.
+          available_styles: stylesForDocType(docType),
+          default_style: defaultTemplateStyle(docType),
         } as DocumentTemplate);
       }
     }
@@ -92,6 +102,9 @@ documentTemplatesRouter.put(
     }
     if (template_style && !isTemplateStyle(template_style)) {
       return res.status(400).json({ message: `template_style must be one of: ${TEMPLATE_STYLES.join(", ")}` });
+    }
+    if (template_style && !TEMPLATE_STYLE_DOC_TYPES[template_style as keyof typeof TEMPLATE_STYLE_DOC_TYPES].includes(docType)) {
+      return res.status(400).json({ message: `The "${template_style}" template is not available for this document type` });
     }
 
     await pool.query(

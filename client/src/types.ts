@@ -1058,4 +1058,7 @@ export interface DocumentTemplate {
   company_name?: string;
   company_code?: string;
   has_pdf?: boolean;
+  /** Template styles this doc type can draw, and the one used when template_style is null. */
+  available_styles?: string[];
+  default_style?: string;
 }

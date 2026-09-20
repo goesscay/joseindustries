@@ -190,6 +190,10 @@ export interface DocumentRecord {
   credit_period: string | null;
   reverse_charge: boolean | number;
 
+  /** PDF template style stamped at creation - see documentTemplates.ts
+   * resolveTemplateStyle. null only on rows older than the column. */
+  template_style: string | null;
+
   subtotal: string;
   discount_amount: string;
   freight_charges: string;

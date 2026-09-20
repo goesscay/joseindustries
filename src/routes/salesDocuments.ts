@@ -8,7 +8,8 @@ import { computeLine, computeTotals, LineInput } from "../utils/totals";
 import { computeGstSplit } from "../utils/gst";
 import { streamDocumentPdf } from "../services/pdf/documentPdf";
 import { streamClassicGstDocumentPdf } from "../services/pdf/classicGstDocumentPdf";
-import { getEffectiveDocumentTemplate, TemplateDocType } from "../services/documentTemplates";
+import { streamClassicQuotationPdf } from "../services/pdf/classicQuotationPdf";
+import { getEffectiveDocumentTemplate, resolveTemplateStyle, pickStyle, TemplateDocType } from "../services/documentTemplates";
 import {
   AccountingError,
   getJournalBySource,
@@ -286,6 +287,10 @@ export function createSalesDocumentRouter(
       const optionalFields = pickOptionalTextFields(req.body ?? {});
 
       const { docNumber, financialYear } = await getNextDocNumber(docType, company.code, new Date(issue_date));
+      // Stamp the PDF template style the settings select *right now* onto
+      // this document, so it keeps that look even if the setting (or the
+      // list of available styles) changes later.
+      const templateStyle = await resolveTemplateStyle(company_id, docType as TemplateDocType);
 
       const conn = await pool.getConnection();
       try {
@@ -300,7 +305,7 @@ export function createSalesDocumentRouter(
               mode_terms_of_payment, other_reference, supplier_reference, terms_and_conditions,
               due_date, credit_period, reverse_charge,
               subtotal, discount_amount, freight_charges, installation_charges,
-              cgst_total, sgst_total, igst_total, tax_total, round_off, grand_total, created_by)
+              cgst_total, sgst_total, igst_total, tax_total, round_off, grand_total, created_by, template_style)
            VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
@@ -309,7 +314,7 @@ export function createSalesDocumentRouter(
                    ?, ?, ?, ?,
                    ?, ?, ?,
                    ?, ?, ?, ?,
-                   ?, ?, ?, ?, ?, ?, ?)`,
+                   ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             docType,
             docNumber,
@@ -353,6 +358,7 @@ export function createSalesDocumentRouter(
             roundOff,
             grandTotal,
             req.user!.sub,
+            templateStyle,
           ]
         );
         const documentId = result.insertId;
@@ -839,19 +845,21 @@ export function createSalesDocumentRouter(
 
       // Document Templates: every field here is this renderer's own
       // built-in default, verbatim - a company/doc_type with no
-      // customization row renders byte-for-byte the same PDF this always
-      // produced (see getEffectiveDocumentTemplate's own doc comment).
+      // customization row renders the same PDF it always did (see
+      // getEffectiveDocumentTemplate's own doc comment).
       const template = await getEffectiveDocumentTemplate(doc.company_id, docType as TemplateDocType, {
         accentColor: "#1B7A4D",
         headerLabel: docType === "tax_invoice" ? "Original for Recipient" : null,
         footerNote: `This is a computer-generated ${title.toLowerCase()}.`,
-        // Tally-style GST invoice format is the new default for these 4
-        // sales doc types - see documentTemplates.ts's TEMPLATE_STYLES doc
-        // comment. "modern" (this renderer's original look) stays fully
-        // selectable per (company, doc_type) via the Document Templates
-        // settings page.
-        templateStyle: "classic_gst",
       });
+      // The layout is whatever style this *document* was stamped with when
+      // it was created (documents.template_style), NOT whatever Settings
+      // currently selects - otherwise changing the setting, or adding a new
+      // style, would silently restyle every existing document. Only a row
+      // that somehow has no stamp falls back to the current setting.
+      template.templateStyle = doc.template_style
+        ? pickStyle(doc.template_style, docType as TemplateDocType)
+        : template.templateStyle;
 
       const normalizedItems = items.map((i) => ({
         ...i,
@@ -862,7 +870,9 @@ export function createSalesDocumentRouter(
         line_total: Number(i.line_total),
       }));
 
-      if (template.templateStyle === "classic_gst") {
+      if (template.templateStyle === "classic_quotation") {
+        streamClassicQuotationPdf(res, title, doc, normalizedItems, customer, company, template);
+      } else if (template.templateStyle === "classic_gst") {
         streamClassicGstDocumentPdf(res, title, doc, normalizedItems, customer, company, template);
       } else {
         streamDocumentPdf(res, title, doc, normalizedItems, customer, company, template);

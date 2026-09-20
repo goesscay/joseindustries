@@ -25,13 +25,38 @@ export type TemplateDocType = (typeof TEMPLATE_DOC_TYPES)[number];
  * variation on one renderer's output. "modern" is this app's original
  * look (documentPdf.ts/receiptPdf.ts); "classic_gst" is a Tally-style
  * Indian GST Tax Invoice format matching a customer-supplied sample
- * (classicGstDocumentPdf.ts), added as the new default for the 4 sales
- * doc types that have PDF export. New styles register here and in the one
- * `switch` each PDF route uses to pick a renderer - nothing else needs to
- * change to add one.
+ * (classicGstDocumentPdf.ts); "classic_quotation" is the client's own
+ * Quotation sheet (classicQuotationPdf.ts). New styles register here, in
+ * TEMPLATE_STYLE_DOC_TYPES below, and in the one branch each PDF route
+ * uses to pick a renderer.
  */
-export const TEMPLATE_STYLES = ["classic_gst", "modern"] as const;
+export const TEMPLATE_STYLES = ["classic_gst", "modern", "classic_quotation"] as const;
 export type TemplateStyle = (typeof TEMPLATE_STYLES)[number];
+
+/** Which document types each style can actually draw - a style is only
+ * offered (and only honored) for these. "classic_quotation" is a
+ * quotation-only layout; "classic_gst" is an invoice layout that also
+ * carries the other sales documents. */
+export const TEMPLATE_STYLE_DOC_TYPES: Record<TemplateStyle, readonly TemplateDocType[]> = {
+  classic_gst: ["quotation", "proforma_invoice", "delivery_challan", "tax_invoice"],
+  modern: TEMPLATE_DOC_TYPES,
+  classic_quotation: ["quotation"],
+};
+
+export function stylesForDocType(docType: TemplateDocType): TemplateStyle[] {
+  return TEMPLATE_STYLES.filter((s) => TEMPLATE_STYLE_DOC_TYPES[s].includes(docType));
+}
+
+/** What a (company, doc_type) renders as when nothing is customized -
+ * and what a *new* document snapshots at creation (see
+ * resolveTemplateStyle). Receipts have only "modern"; Quotations default
+ * to the client's own quotation sheet; the other sales documents to the
+ * Tally-style invoice. */
+export function defaultTemplateStyle(docType: TemplateDocType): TemplateStyle {
+  if (docType === "quotation") return "classic_quotation";
+  if (docType === "proforma_invoice" || docType === "delivery_challan" || docType === "tax_invoice") return "classic_gst";
+  return "modern";
+}
 
 /** Which of these doc types actually have a PDF export today that reads
  * this settings row - the rest are still fully configurable (ready for
@@ -52,11 +77,6 @@ export interface DocumentTemplateDefaults {
    * every type except Tax Invoice's built-in "Original for Recipient"). */
   headerLabel: string | null;
   footerNote: string;
-  /** The style a route falls back to when no row exists. Receipts (which
-   * have no classic_gst renderer) must pass "modern" here - never rely on
-   * the column's own DB default, which is "classic_gst" for the sales doc
-   * types. */
-  templateStyle: TemplateStyle;
 }
 
 export interface EffectiveDocumentTemplate {
@@ -96,10 +116,29 @@ export async function getEffectiveDocumentTemplate(
     accentColor: row?.accent_color || defaults.accentColor,
     headerLabel: row && row.header_label !== null ? row.header_label : defaults.headerLabel,
     footerNote: row && row.footer_note !== null ? row.footer_note : defaults.footerNote,
-    templateStyle: row && isTemplateStyle(row.template_style) ? row.template_style : defaults.templateStyle,
+    templateStyle: pickStyle(row?.template_style, docType),
   };
 }
 
-function isTemplateStyle(v: unknown): v is TemplateStyle {
+export function isTemplateStyle(v: unknown): v is TemplateStyle {
   return typeof v === "string" && (TEMPLATE_STYLES as readonly string[]).includes(v);
+}
+
+/** A stored/snapshotted style only counts if it's a known style that this
+ * doc type can actually draw - anything stale, unknown, or from a doc
+ * type that no longer supports it falls back to that doc type's default. */
+export function pickStyle(v: unknown, docType: TemplateDocType): TemplateStyle {
+  return isTemplateStyle(v) && TEMPLATE_STYLE_DOC_TYPES[v].includes(docType) ? v : defaultTemplateStyle(docType);
+}
+
+/** The style a document being created *right now* should be stamped with:
+ * whatever Settings > Document Templates currently selects for its
+ * (company, doc_type). Stored on the document itself so later settings
+ * changes never restyle documents that already exist. */
+export async function resolveTemplateStyle(companyId: number, docType: TemplateDocType): Promise<TemplateStyle> {
+  const [rows] = await pool.query<any[]>(
+    "SELECT template_style FROM document_templates WHERE company_id = ? AND doc_type = ? LIMIT 1",
+    [companyId, docType]
+  );
+  return pickStyle(rows[0]?.template_style, docType);
 }
