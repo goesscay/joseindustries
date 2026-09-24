@@ -1,4 +1,6 @@
-import { Router } from "express";
+import { Response, Router } from "express";
+import { PassThrough } from "stream";
+import { PDFDocument as PDFLibDocument } from "pdf-lib";
 import { pool } from "../config/db";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
@@ -1018,15 +1020,45 @@ export function createSalesDocumentRouter(
               return out;
             })();
 
-      if (template.templateStyle === "classic_measured") {
-        streamClassicMeasuredPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
-      } else if (template.templateStyle === "classic_quotation") {
-        streamClassicQuotationPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
-      } else if (template.templateStyle === "classic_gst") {
-        streamClassicGstDocumentPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
-      } else {
-        streamDocumentPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
+      const render = (out: Response, tpl: typeof template) => {
+        if (tpl.templateStyle === "classic_measured") {
+          streamClassicMeasuredPdf(out, pdfTitle, doc, linesForPdf, customer, company, tpl);
+        } else if (tpl.templateStyle === "classic_quotation") {
+          streamClassicQuotationPdf(out, pdfTitle, doc, linesForPdf, customer, company, tpl);
+        } else if (tpl.templateStyle === "classic_gst") {
+          streamClassicGstDocumentPdf(out, pdfTitle, doc, linesForPdf, customer, company, tpl);
+        } else {
+          streamDocumentPdf(out, pdfTitle, doc, linesForPdf, customer, company, tpl);
+        }
+      };
+
+      // Invoices print as one two-copy PDF (so a single print job gives both
+      // sheets): identical layouts, only the header label differs. ?copies=1
+      // gives the single sheet.
+      if (docType === "tax_invoice" && req.query.copies !== "1") {
+        const labels = ["Original for Recipient", "Duplicate for Transporter"];
+        const merged = await PDFLibDocument.create();
+        for (const label of labels) {
+          const chunks: Buffer[] = [];
+          const sink = new PassThrough();
+          sink.on("data", (c: Buffer) => chunks.push(c));
+          const finished = new Promise<void>((resolve, reject) => {
+            sink.on("end", () => resolve());
+            sink.on("error", reject);
+          });
+          Object.assign(sink, { setHeader: () => undefined });
+          render(sink as unknown as Response, { ...template, headerLabel: label });
+          await finished;
+          const part = await PDFLibDocument.load(Buffer.concat(chunks));
+          const pages = await merged.copyPages(part, part.getPageIndices());
+          pages.forEach((pg) => merged.addPage(pg));
+        }
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="${doc.doc_number.replace(/\//g, "-")}.pdf"`);
+        res.end(Buffer.from(await merged.save()));
+        return;
       }
+      render(res, template);
     })
   );
 
