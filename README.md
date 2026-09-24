@@ -8,7 +8,7 @@ process — this matches Hostinger's Web Apps hosting, which runs one Node.js ap
 
 | Layer | Technology |
 | --- | --- |
-| Runtime | Node.js 20, TypeScript 5 |
+| Runtime | Node.js 18+, TypeScript 5 |
 | Backend | Express 4, `mysql2` (connection pool, raw SQL), `jsonwebtoken` + `bcryptjs` (JWT cookie auth), `cookie-parser`, `cors`, `dotenv` |
 | Database | MySQL / MariaDB - idempotent `src/db/schema.sql` applied by `npm run db:migrate` |
 | Frontend | React 18, Vite 5, Ant Design 5, React Router 6, Day.js, installable PWA (`vite-plugin-pwa`) |
