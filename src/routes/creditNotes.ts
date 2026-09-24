@@ -256,13 +256,13 @@ creditNotesRouter.post(
       const { isInterState, cgstTotal, sgstTotal, igstTotal } = computeGstSplit(lines, company.state, customer.state);
       const taxTotal = isInterState ? igstTotal : cgstTotal + sgstTotal;
 
-      const { docNumber, financialYear } = await getNextDocNumber("credit_note", company.code, new Date(issue_date));
+      const { docNumber, financialYear } = await getNextDocNumber("credit_note", company.code, new Date(issue_date), invoice.gst_type === "non_gst" ? "non_gst" : "gst");
 
       const [result] = await conn.query<any>(
         `INSERT INTO credit_notes
            (credit_note_no, financial_year, company_id, customer_id, tax_invoice_id, status, issue_date, reason, notes,
-            subtotal, cgst_total, sgst_total, igst_total, tax_total, grand_total, created_by)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            subtotal, cgst_total, sgst_total, igst_total, tax_total, grand_total, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -279,6 +279,8 @@ creditNotesRouter.post(
           taxTotal,
           grandTotal,
           req.user!.sub,
+          // A credit note stays in the same GST book as the invoice it corrects.
+          invoice.gst_type === "non_gst" ? "non_gst" : "gst",
         ]
       );
       const creditNoteId = result.insertId;

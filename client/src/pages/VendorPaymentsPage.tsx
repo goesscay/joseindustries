@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Table, Button, Input, Space, Modal, Form, Select, DatePicker, InputNumber, message, Popconfirm, Typography } from "antd";
+import { Table, Button, Input, Space, Modal, Form, Select, DatePicker, InputNumber, message, Popconfirm, Typography, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { RemoteSelect } from "../components/RemoteSelect";
-import { Account, Company, Expense, PaymentMode, Vendor, VendorPayment } from "../types";
+import { Account, Company, Expense, GstType, PaymentMode, Vendor, VendorPayment } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 const PAGE_SIZE = 10;
 
@@ -108,6 +109,7 @@ export function VendorPaymentsPage() {
     form.resetFields();
     form.setFieldsValue({
       paid_date: dayjs(),
+      gst_type: "gst",
       company_id: companies[0]?.id,
       payment_mode: "cash",
     });
@@ -119,6 +121,7 @@ export function VendorPaymentsPage() {
     setEditing(record);
     form.setFieldsValue({
       company_id: record.company_id,
+      gst_type: record.gst_type || "gst",
       vendor_id: record.vendor_id,
       expense_id: record.expense_id,
       account_id: record.account_id,
@@ -165,6 +168,13 @@ export function VendorPaymentsPage() {
   const columns: ColumnsType<VendorPayment> = [
     { title: "No.", dataIndex: "payment_no", key: "payment_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
+    {
+      title: "GST",
+      dataIndex: "gst_type",
+      key: "gst_type",
+      width: 100,
+      render: (v: GstType | undefined) => (v === "non_gst" ? <Tag color="orange">Without GST</Tag> : <Tag color="green">With GST</Tag>),
+    },
     { title: "Vendor", dataIndex: "vendor_name", key: "vendor_name" },
     { title: "Against Expense", dataIndex: "expense_number", key: "expense_number", render: (v) => v || "-" },
     {
@@ -256,6 +266,9 @@ export function VendorPaymentsPage() {
               options={companies.map((c) => ({ value: c.id, label: c.name }))}
               onChange={() => form.setFieldsValue({ account_id: undefined })}
             />
+          </Form.Item>
+          <Form.Item name="gst_type" label="GST" extra="Without GST transactions are booked separately from GST transactions.">
+            <Select options={GST_TYPE_OPTIONS} />
           </Form.Item>
           <Form.Item
             name="vendor_id"

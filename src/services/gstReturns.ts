@@ -130,7 +130,7 @@ export async function getGstr1(companyId: number, from: string, to: string): Pro
             c.name as customer_name, c.gstin as customer_gstin
      FROM documents d
      JOIN customers c ON c.id = d.customer_id
-     WHERE d.doc_type = 'tax_invoice' AND d.company_id = ? AND d.issue_date BETWEEN ? AND ?
+     WHERE d.doc_type = 'tax_invoice' AND d.gst_type = 'gst' AND d.company_id = ? AND d.issue_date BETWEEN ? AND ?
      ORDER BY d.issue_date ASC, d.doc_number ASC`,
     [companyId, from, to]
   );

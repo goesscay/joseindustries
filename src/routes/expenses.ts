@@ -5,7 +5,7 @@ import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { AccountingError, getJournalBySource, postExpenseJournalTx, reverseJournalTx } from "../services/accounting";
-import { Company, Expense, Journal, Vendor } from "../types";
+import { parseGstType, Company, Expense, Journal, Vendor } from "../types";
 
 export const expensesRouter = Router();
 const MODULE = "expenses.expenses";
@@ -73,7 +73,8 @@ async function validatePayload(body: any) {
   if (!Number.isFinite(Number(amount)) || Number(amount) < 0) {
     return { error: "amount must be a non-negative number" };
   }
-  const taxAmount = Number(body.tax_amount) || 0;
+  // A "Without GST" expense carries no input tax.
+  const taxAmount = parseGstType(body.gst_type) === "non_gst" ? 0 : Number(body.tax_amount) || 0;
   if (taxAmount < 0) return { error: "tax_amount cannot be negative" };
 
   const [companyRows] = await pool.query<any[]>("SELECT * FROM companies WHERE id = ?", [company_id]);
@@ -110,7 +111,7 @@ expensesRouter.post(
     const { vendor_id, category_id, expense_date, description, amount, reference_no, notes } = req.body;
     const totalAmount = Number(amount) + taxAmount;
 
-    const { docNumber, financialYear } = await getNextDocNumber("expense", company!.code, new Date(expense_date));
+    const { docNumber, financialYear } = await getNextDocNumber("expense", company!.code, new Date(expense_date), parseGstType(req.body.gst_type));
 
     const conn = await pool.getConnection();
     try {
@@ -119,8 +120,8 @@ expensesRouter.post(
       const [insertResult] = await conn.query<any>(
         `INSERT INTO expenses
            (expense_no, financial_year, company_id, vendor_id, category_id, expense_date, description,
-            amount, tax_amount, total_amount, reference_no, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            amount, tax_amount, total_amount, reference_no, notes, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -135,6 +136,7 @@ expensesRouter.post(
           reference_no || null,
           notes || null,
           req.user!.sub,
+          parseGstType(req.body.gst_type),
         ]
       );
       const expenseId = insertResult.insertId;
@@ -195,7 +197,7 @@ expensesRouter.put(
       await conn.query(
         `UPDATE expenses SET
            company_id = ?, vendor_id = ?, category_id = ?, expense_date = ?, description = ?,
-           amount = ?, tax_amount = ?, total_amount = ?, reference_no = ?, notes = ?
+           amount = ?, tax_amount = ?, total_amount = ?, reference_no = ?, notes = ?, gst_type = ?
          WHERE id = ?`,
         [
           req.body.company_id,
@@ -208,6 +210,7 @@ expensesRouter.put(
           totalAmount,
           reference_no || null,
           notes || null,
+          parseGstType(req.body.gst_type),
           id,
         ]
       );

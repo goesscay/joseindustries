@@ -3,6 +3,7 @@ import { pool } from "../config/db";
 import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
+import { parseGstType } from "../types";
 import {
   AccountingError,
   getJournalById,
@@ -64,6 +65,7 @@ bankCashEntriesRouter.post(
         particulars,
         notes: notes || null,
         createdBy: req.user!.sub,
+        gstType: parseGstType(req.body?.gst_type),
       });
       await conn.commit();
       const lines = await getJournalLines(journal.id);

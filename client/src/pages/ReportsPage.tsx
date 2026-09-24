@@ -19,7 +19,9 @@ import {
   ProfitAndLossRow,
   TrialBalanceResult,
   TrialBalanceRow,
+  GstType,
 } from "../types";
+import { GST_REPORT_OPTIONS } from "../constants/gst";
 
 const { RangePicker } = DatePicker;
 
@@ -151,6 +153,7 @@ interface PartyLedgerEntry {
 
 function PartyLedgerTab() {
   const [partyType, setPartyType] = useState<"customer" | "vendor">("customer");
+  const [gstFilter, setGstFilter] = useState<GstType | "all">("all");
   const [partyId, setPartyId] = useState<number | undefined>();
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
   const [loading, setLoading] = useState(false);
@@ -167,7 +170,7 @@ function PartyLedgerTab() {
     setLoading(true);
     try {
       const res = await api.get<{ openingBalance: number; entries: PartyLedgerEntry[]; closingBalance: number }>(
-        `/reports/party-ledger?type=${partyType}&id=${partyId}&from=${range[0].format("YYYY-MM-DD")}&to=${range[1].format("YYYY-MM-DD")}`
+        `/reports/party-ledger?type=${partyType}&id=${partyId}&from=${range[0].format("YYYY-MM-DD")}&to=${range[1].format("YYYY-MM-DD")}&gst_type=${gstFilter}`
       );
       setOpeningBalance(res.openingBalance);
       setEntries(res.entries);
@@ -182,7 +185,7 @@ function PartyLedgerTab() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partyId, range]);
+  }, [partyId, range, gstFilter]);
 
   // Opens the PDF in a new tab, exactly like every other document's
   // "Download PDF" button in this app - the browser's own PDF viewer then
@@ -194,6 +197,7 @@ function PartyLedgerTab() {
       id: String(partyId),
       from: range[0].format("YYYY-MM-DD"),
       to: range[1].format("YYYY-MM-DD"),
+      gst_type: gstFilter,
     });
     window.open(`/api/reports/party-ledger/pdf?${params.toString()}`, "_blank");
   }
@@ -224,6 +228,12 @@ function PartyLedgerTab() {
           onChange={setPartyId}
         />
         <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+        <Select
+          value={gstFilter}
+          options={GST_REPORT_OPTIONS}
+          onChange={setGstFilter}
+          style={{ width: 220 }}
+        />
       </Space>
 
       {partyId && (
@@ -265,6 +275,7 @@ function PartyLedgerTab() {
 // here.
 function ProfitLossTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
+  const [gstFilter, setGstFilter] = useState<GstType | "all">("all");
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf("year"), dayjs()]);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ProfitAndLossResult | null>(null);
@@ -281,6 +292,7 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
         company_id: String(companyId),
         from: range[0].format("YYYY-MM-DD"),
         to: range[1].format("YYYY-MM-DD"),
+        gst_type: gstFilter,
       });
       const res = await api.get<ProfitAndLossResult>(`/accounting/profit-loss?${params.toString()}`);
       setData(res);
@@ -295,7 +307,7 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, range]);
+  }, [companyId, range, gstFilter]);
 
   const columns: ColumnsType<ProfitAndLossRow> = [
     { title: "Account Code", dataIndex: "account_code", key: "account_code", width: 110 },
@@ -329,6 +341,12 @@ function ProfitLossTab({ companies }: { companies: Company[] }) {
           onChange={setCompanyId}
         />
         <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+        <Select
+          value={gstFilter}
+          options={GST_REPORT_OPTIONS}
+          onChange={setGstFilter}
+          style={{ width: 220 }}
+        />
       </Space>
 
       {data && (
@@ -608,6 +626,7 @@ const GL_SOURCE_LABELS: Record<string, string> = {
 // before those phases were wired in do not, by design (no backfill).
 function GeneralLedgerTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
+  const [gstFilter, setGstFilter] = useState<GstType | "all">("all");
   const [accounts, setAccounts] = useState<ChartOfAccount[]>([]);
   const [typeFilter, setTypeFilter] = useState<LedgerAccountType | undefined>();
   const [accountId, setAccountId] = useState<number | undefined>();
@@ -645,6 +664,7 @@ function GeneralLedgerTab({ companies }: { companies: Company[] }) {
         account_id: String(accountId),
         from: range[0].format("YYYY-MM-DD"),
         to: range[1].format("YYYY-MM-DD"),
+        gst_type: gstFilter,
       });
       const res = await api.get<GeneralLedgerResult>(`/accounting/general-ledger?${params.toString()}`);
       setResult(res);
@@ -659,7 +679,7 @@ function GeneralLedgerTab({ companies }: { companies: Company[] }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, accountId, range]);
+  }, [companyId, accountId, range, gstFilter]);
 
   const columns: ColumnsType<GeneralLedgerEntry> = [
     { title: "Date", dataIndex: "journal_date", key: "journal_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
@@ -713,6 +733,12 @@ function GeneralLedgerTab({ companies }: { companies: Company[] }) {
           onChange={setAccountId}
         />
         <RangePicker value={range} format="DD MMM YYYY" onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} />
+        <Select
+          value={gstFilter}
+          options={GST_REPORT_OPTIONS}
+          onChange={setGstFilter}
+          style={{ width: 220 }}
+        />
       </Space>
 
       {!accountId && <Typography.Text type="secondary">Select an account to view its General Ledger.</Typography.Text>}
@@ -743,6 +769,7 @@ function GeneralLedgerTab({ companies }: { companies: Company[] }) {
 // expenses/documents/accounts.balance/the old journal_entries table.
 function TrialBalanceTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
+  const [gstFilter, setGstFilter] = useState<GstType | "all">("all");
   const [asOf, setAsOf] = useState<Dayjs>(dayjs());
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<TrialBalanceResult | null>(null);
@@ -756,7 +783,7 @@ function TrialBalanceTab({ companies }: { companies: Company[] }) {
     setLoading(true);
     try {
       const res = await api.get<TrialBalanceResult>(
-        `/accounting/trial-balance?company_id=${companyId}&as_of=${asOf.format("YYYY-MM-DD")}`
+        `/accounting/trial-balance?company_id=${companyId}&as_of=${asOf.format("YYYY-MM-DD")}&gst_type=${gstFilter}`
       );
       setResult(res);
     } catch (err) {
@@ -770,7 +797,7 @@ function TrialBalanceTab({ companies }: { companies: Company[] }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, asOf]);
+  }, [companyId, asOf, gstFilter]);
 
   const columns: ColumnsType<TrialBalanceRow> = [
     { title: "Account Code", dataIndex: "account_code", key: "account_code", width: 110 },
@@ -791,6 +818,12 @@ function TrialBalanceTab({ companies }: { companies: Company[] }) {
           onChange={setCompanyId}
         />
         <DatePicker value={asOf} format="DD MMM YYYY" onChange={(d) => d && setAsOf(d)} allowClear={false} />
+        <Select
+          value={gstFilter}
+          options={GST_REPORT_OPTIONS}
+          onChange={setGstFilter}
+          style={{ width: 220 }}
+        />
       </Space>
 
       {result && (
@@ -844,6 +877,7 @@ function TrialBalanceTab({ companies }: { companies: Company[] }) {
 // its real, stored-balance siblings.
 function BalanceSheetTab({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | undefined>();
+  const [gstFilter, setGstFilter] = useState<GstType | "all">("all");
   const [asOf, setAsOf] = useState<Dayjs>(dayjs());
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BalanceSheetResult | null>(null);
@@ -857,7 +891,7 @@ function BalanceSheetTab({ companies }: { companies: Company[] }) {
     setLoading(true);
     try {
       const res = await api.get<BalanceSheetResult>(
-        `/accounting/balance-sheet?company_id=${companyId}&as_of=${asOf.format("YYYY-MM-DD")}`
+        `/accounting/balance-sheet?company_id=${companyId}&as_of=${asOf.format("YYYY-MM-DD")}&gst_type=${gstFilter}`
       );
       setResult(res);
     } catch (err) {
@@ -871,7 +905,7 @@ function BalanceSheetTab({ companies }: { companies: Company[] }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, asOf]);
+  }, [companyId, asOf, gstFilter]);
 
   const columns: ColumnsType<BalanceSheetRow> = [
     { title: "Account Code", dataIndex: "account_code", key: "account_code", width: 110, render: (v: string | null) => v || "-" },
@@ -916,6 +950,12 @@ function BalanceSheetTab({ companies }: { companies: Company[] }) {
           onChange={setCompanyId}
         />
         <DatePicker value={asOf} format="DD MMM YYYY" onChange={(d) => d && setAsOf(d)} allowClear={false} />
+        <Select
+          value={gstFilter}
+          options={GST_REPORT_OPTIONS}
+          onChange={setGstFilter}
+          style={{ width: 220 }}
+        />
       </Space>
 
       {result && (

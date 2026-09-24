@@ -1533,3 +1533,25 @@ ALTER TABLE document_items
   ADD COLUMN IF NOT EXISTS pieces DECIMAL(10, 3) NULL,
   ADD COLUMN IF NOT EXISTS line_kind VARCHAR(10) NOT NULL DEFAULT 'item';
 ALTER TABLE document_items MODIFY COLUMN qty DECIMAL(12, 4) NOT NULL DEFAULT 1;
+
+-- With GST / Without GST. Some transactions are raised without any GST; they
+-- are tracked as a separate "book" so accounts and reports can be viewed with
+-- GST transactions, without GST transactions, or all together.
+--   gst_type = 'gst'     (default - every existing row) the normal GST books
+--   gst_type = 'non_gst' no GST charged; excluded from GST returns; numbered
+--                        from its own series so the GST invoice sequence
+--                        stays unbroken
+-- Sales documents, receipts, credit/debit notes, purchase bills, expenses,
+-- vendor payments and bank/cash entries each carry the flag; a journal
+-- inherits it from the record that posted it (see accounting.ts
+-- resolveJournalGstType), and manual journals set it explicitly, so every
+-- ledger-based report can filter on journals.gst_type alone.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE credit_notes ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE debit_notes ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE purchase_bills ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE vendor_payments ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE journals ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
+ALTER TABLE journals ADD INDEX IF NOT EXISTS idx_journals_gst_type (company_id, gst_type, journal_date);

@@ -19,7 +19,8 @@ import { PlusOutlined, EyeOutlined, UndoOutlined, DeleteOutlined } from "@ant-de
 import dayjs, { Dayjs } from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { ChartOfAccount, Company, Journal, JournalLine } from "../types";
+import { ChartOfAccount, Company, GstType, Journal, JournalLine } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 const { RangePicker } = DatePicker;
 const PAGE_SIZE = 20;
@@ -164,6 +165,7 @@ export function JournalEntriesPage() {
     form.resetFields();
     form.setFieldsValue({
       company_id: companyId,
+      gst_type: "gst",
       journal_date: dayjs(),
       lines: [
         { account_id: undefined, debit: undefined, credit: undefined, description: undefined },
@@ -184,6 +186,7 @@ export function JournalEntriesPage() {
       await api.post("/journals", {
         company_id: values.company_id,
         journal_date: values.journal_date.format("YYYY-MM-DD"),
+        gst_type: values.gst_type as GstType,
         reference: values.reference || null,
         description: values.description || null,
         lines: (values.lines as LineFormValue[]).map((l) => ({
@@ -324,6 +327,9 @@ export function JournalEntriesPage() {
             </Form.Item>
             <Form.Item name="journal_date" label="Date" rules={[{ required: true, message: "Required" }]} style={{ flex: 1 }}>
               <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item name="gst_type" label="GST" style={{ flex: 1 }}>
+              <Select options={GST_TYPE_OPTIONS} />
             </Form.Item>
             <Form.Item name="reference" label="Reference (optional)" style={{ flex: 1 }}>
               <Input />

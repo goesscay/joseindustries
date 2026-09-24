@@ -8,7 +8,7 @@ import { getNextDocNumber } from "../services/numbering";
 import { streamReceiptPdf } from "../services/pdf/receiptPdf";
 import { getEffectiveDocumentTemplate } from "../services/documentTemplates";
 import { AccountingError, getJournalBySource, postReceiptJournalTx, reverseJournalTx } from "../services/accounting";
-import { Company, Customer, DocumentRecord, Journal, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation, Role } from "../types";
+import { parseGstType, GstType, Company, Customer, DocumentRecord, Journal, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation, Role } from "../types";
 
 export const receiptsRouter = Router();
 const MODULE = "sales.receipts";
@@ -58,7 +58,8 @@ async function findAllocations(receiptId: number): Promise<ReceiptAllocation[]> 
 async function getOutstandingInvoices(
   customerId: number,
   companyId: number,
-  excludeReceiptId?: number
+  excludeReceiptId?: number,
+  gstType: GstType = "gst"
 ): Promise<OutstandingInvoice[]> {
   const [rows] = await pool.query<any[]>(
     `SELECT d.id, d.doc_number, d.issue_date, d.grand_total,
@@ -69,9 +70,9 @@ async function getOutstandingInvoices(
               as paid_amount
      FROM documents d
      WHERE d.doc_type = 'tax_invoice' AND d.status != 'cancelled'
-       AND d.customer_id = ? AND d.company_id = ?
+       AND d.customer_id = ? AND d.company_id = ? AND d.gst_type = ?
      ORDER BY d.issue_date ASC, d.id ASC`,
-    excludeReceiptId ? [excludeReceiptId, customerId, companyId] : [customerId, companyId]
+    excludeReceiptId ? [excludeReceiptId, customerId, companyId, gstType] : [customerId, companyId, gstType]
   );
   return rows
     .map((r) => {
@@ -112,7 +113,8 @@ async function resolveAllocations(
   customerId: number,
   companyId: number,
   amount: number,
-  excludeReceiptId?: number
+  excludeReceiptId?: number,
+  gstType: GstType = "gst"
 ): Promise<ResolvedAllocation[]> {
   const raw = Array.isArray(body.allocations)
     ? body.allocations
@@ -135,12 +137,12 @@ async function resolveAllocations(
     throw new ValidationError("Allocated amounts can't add up to more than the amount received");
   }
 
-  const outstanding = await getOutstandingInvoices(customerId, companyId, excludeReceiptId);
+  const outstanding = await getOutstandingInvoices(customerId, companyId, excludeReceiptId, gstType);
   const balanceById = new Map(outstanding.map((o) => [o.id, o.balance_due]));
   for (const a of resolved) {
     const balance = balanceById.get(a.tax_invoice_id);
     if (balance === undefined) {
-      throw new ValidationError(`Invoice ${a.tax_invoice_id} does not belong to this customer or has no balance outstanding`);
+      throw new ValidationError(`Invoice ${a.tax_invoice_id} does not belong to this customer, is not in the same GST book (With GST / Without GST) as this receipt, or has no balance outstanding`);
     }
     if (a.amount > balance + 0.01) {
       throw new ValidationError(`Allocated amount exceeds invoice ${a.tax_invoice_id}'s outstanding balance of Rs. ${balance.toFixed(2)}`);
@@ -167,11 +169,14 @@ receiptsRouter.get(
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const companyId = req.query.company_id ? Number(req.query.company_id) : null;
     const offset = (page - 1) * perPage;
+    const gstFilter = req.query.gst_type === "gst" || req.query.gst_type === "non_gst" ? String(req.query.gst_type) : null;
 
     const searchClause = search ? "AND (r.receipt_no LIKE ? OR c.name LIKE ?)" : "";
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
     const companyClause = companyId ? "AND r.company_id = ?" : "";
     const companyParams = companyId ? [companyId] : [];
+    const gstClause = gstFilter ? "AND r.gst_type = ?" : "";
+    const gstParams = gstFilter ? [gstFilter] : [];
 
     const [rows] = await pool.query<any[]>(
       `SELECT r.*, c.name as customer_name, co.name as company_name, co.code as company_code,
@@ -181,14 +186,14 @@ receiptsRouter.get(
        JOIN customers c ON c.id = r.customer_id
        JOIN companies co ON co.id = r.company_id
        LEFT JOIN documents inv ON inv.id = r.tax_invoice_id
-       WHERE 1=1 ${searchClause} ${companyClause}
+       WHERE 1=1 ${searchClause} ${companyClause} ${gstClause}
        ORDER BY r.received_date DESC, r.id DESC
        LIMIT ? OFFSET ?`,
-      [...searchParams, ...companyParams, perPage, offset]
+      [...searchParams, ...companyParams, ...gstParams, perPage, offset]
     );
     const [countRows] = await pool.query<any[]>(
-      `SELECT COUNT(*) as total FROM receipts r JOIN customers c ON c.id = r.customer_id WHERE 1=1 ${searchClause} ${companyClause}`,
-      [...searchParams, ...companyParams]
+      `SELECT COUNT(*) as total FROM receipts r JOIN customers c ON c.id = r.customer_id WHERE 1=1 ${searchClause} ${companyClause} ${gstClause}`,
+      [...searchParams, ...companyParams, ...gstParams]
     );
 
     res.json({ data: rows, meta: { page, perPage, total: countRows[0].total as number } });
@@ -203,7 +208,7 @@ receiptsRouter.get(
     const companyId = req.query.company_id ? Number(req.query.company_id) : null;
     if (!customerId || !companyId) return res.status(400).json({ message: "customer_id and company_id are required" });
     const excludeReceiptId = req.query.exclude_receipt_id ? Number(req.query.exclude_receipt_id) : undefined;
-    const invoices = await getOutstandingInvoices(customerId, companyId, excludeReceiptId);
+    const invoices = await getOutstandingInvoices(customerId, companyId, excludeReceiptId, parseGstType(req.query.gst_type));
     res.json({ data: invoices });
   })
 );
@@ -256,6 +261,9 @@ async function validatePayload(body: any, userId: number, userRole: Role) {
     if (invoice.customer_id !== Number(customer_id)) {
       return { error: "Selected invoice does not belong to this customer" };
     }
+    if (parseGstType(invoice.gst_type) !== parseGstType(body.gst_type)) {
+      return { error: "Selected invoice is in a different GST book (With GST / Without GST) than this receipt" };
+    }
   }
 
   if (account_id) {
@@ -291,10 +299,11 @@ receiptsRouter.post(
     const { company } = result;
 
     const { customer_id, account_id, amount, payment_mode, reference_no, received_date, notes } = req.body;
+    const gstType = parseGstType(req.body.gst_type);
 
     let allocations: ResolvedAllocation[];
     try {
-      allocations = await resolveAllocations(req.body, Number(customer_id), Number(req.body.company_id), Number(amount));
+      allocations = await resolveAllocations(req.body, Number(customer_id), Number(req.body.company_id), Number(amount), undefined, gstType);
     } catch (err) {
       if (err instanceof ValidationError) return res.status(err.status).json({ message: err.message });
       throw err;
@@ -305,7 +314,7 @@ receiptsRouter.post(
     // no single invoice describes this receipt any more.
     const legacyTaxInvoiceId = allocations.length === 1 ? allocations[0].tax_invoice_id : null;
 
-    const { docNumber, financialYear } = await getNextDocNumber("receipt", company!.code, new Date(received_date));
+    const { docNumber, financialYear } = await getNextDocNumber("receipt", company!.code, new Date(received_date), gstType);
 
     const conn = await pool.getConnection();
     try {
@@ -313,8 +322,8 @@ receiptsRouter.post(
 
       const [insertResult] = await conn.query<any>(
         `INSERT INTO receipts
-           (receipt_no, financial_year, company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (receipt_no, financial_year, company_id, customer_id, tax_invoice_id, account_id, amount, payment_mode, reference_no, received_date, notes, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -328,6 +337,7 @@ receiptsRouter.post(
           received_date,
           notes || null,
           req.user!.sub,
+          gstType,
         ]
       );
       const receiptId = insertResult.insertId;
@@ -386,10 +396,11 @@ receiptsRouter.put(
     if ("error" in result) return res.status(400).json({ message: result.error });
 
     const { company_id, customer_id, account_id, amount, payment_mode, reference_no, received_date, notes } = req.body;
+    const gstType = parseGstType(req.body.gst_type);
 
     let allocations: ResolvedAllocation[];
     try {
-      allocations = await resolveAllocations(req.body, Number(customer_id), Number(company_id), Number(amount), id);
+      allocations = await resolveAllocations(req.body, Number(customer_id), Number(company_id), Number(amount), id, gstType);
     } catch (err) {
       if (err instanceof ValidationError) return res.status(err.status).json({ message: err.message });
       throw err;
@@ -410,7 +421,7 @@ receiptsRouter.put(
       await conn.query(
         `UPDATE receipts SET
            company_id = ?, customer_id = ?, tax_invoice_id = ?, account_id = ?, amount = ?, payment_mode = ?,
-           reference_no = ?, received_date = ?, notes = ?
+           reference_no = ?, received_date = ?, notes = ?, gst_type = ?
          WHERE id = ?`,
         [
           company_id,
@@ -422,6 +433,7 @@ receiptsRouter.put(
           reference_no || null,
           received_date,
           notes || null,
+          gstType,
           id,
         ]
       );

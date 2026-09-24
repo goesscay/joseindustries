@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { getFinancialYear } from "./financialYear";
-import { DocType } from "../types";
+import { DocType, GstType } from "../types";
 
 // Accounts-module series (expenses/vendor_payments) live in their own tables,
 // not the `documents` table, so they're kept out of the ENUM-bound DocType
@@ -43,7 +43,16 @@ const PREFIXES: Record<SeriesType, string> = {
  * connection-scoped), so this explicitly checks out a single connection
  * rather than using the shared pool.
  */
-export async function getNextDocNumber(docType: SeriesType, companyCode: string, date: Date = new Date()) {
+export async function getNextDocNumber(
+  docType: SeriesType,
+  companyCode: string,
+  date: Date = new Date(),
+  gstType: GstType = "gst"
+) {
+  // "Without GST" documents run their own series (counter key suffixed
+  // "_ng", numbers carry an "NG" marker) so the consecutive GST invoice
+  // sequence never has gaps caused by non-GST documents.
+  const counterKey = gstType === "non_gst" ? `${docType}_ng` : docType;
   const financialYear = getFinancialYear(date);
   const conn = await pool.getConnection();
 
@@ -52,12 +61,12 @@ export async function getNextDocNumber(docType: SeriesType, companyCode: string,
       `INSERT INTO doc_counters (doc_type, company_code, financial_year, last_number)
        VALUES (?, ?, ?, LAST_INSERT_ID(1))
        ON DUPLICATE KEY UPDATE last_number = LAST_INSERT_ID(last_number + 1)`,
-      [docType, companyCode, financialYear]
+      [counterKey, companyCode, financialYear]
     );
     const [rows] = await conn.query<any[]>("SELECT LAST_INSERT_ID() as seq");
     const seq = Number(rows[0].seq);
 
-    const docNumber = formatDocNumber(docType, companyCode, financialYear, seq);
+    const docNumber = formatDocNumber(docType, companyCode, financialYear, seq, gstType);
     return { docNumber, financialYear, seq };
   } finally {
     conn.release();
@@ -75,12 +84,13 @@ export async function getNextDocNumber(docType: SeriesType, companyCode: string,
  *   - quotation:   "{companyCode}-QT-{seq}/{financialYear}", 2-digit seq
  *     (e.g. "JI-QT-01/26-27", "JE-QT-01/26-27")
  */
-function formatDocNumber(docType: SeriesType, companyCode: string, financialYear: string, seq: number): string {
+function formatDocNumber(docType: SeriesType, companyCode: string, financialYear: string, seq: number, gstType: GstType): string {
+  const ng = gstType === "non_gst" ? "NG-" : "";
   if (docType === "tax_invoice") {
-    return `${companyCode}-${String(seq).padStart(3, "0")}/${financialYear}`;
+    return `${companyCode}-${ng}${String(seq).padStart(3, "0")}/${financialYear}`;
   }
   if (docType === "quotation") {
-    return `${companyCode}-QT-${String(seq).padStart(2, "0")}/${financialYear}`;
+    return `${companyCode}-${ng}QT-${String(seq).padStart(2, "0")}/${financialYear}`;
   }
-  return `${PREFIXES[docType]}/${companyCode}/${financialYear}/${String(seq).padStart(4, "0")}`;
+  return `${PREFIXES[docType]}/${companyCode}/${financialYear}/${ng}${String(seq).padStart(4, "0")}`;
 }

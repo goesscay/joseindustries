@@ -4,7 +4,7 @@ import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { AccountingError, createJournal, getJournalById, getJournalLines, reverseJournal } from "../services/accounting";
-import { Journal } from "../types";
+import { Journal, parseGstType } from "../types";
 
 export const journalsRouter = Router();
 const MODULE = "accounting.journals";
@@ -95,6 +95,7 @@ journalsRouter.post(
         reference: reference ?? null,
         source_type: null,
         source_id: null,
+        gst_type: parseGstType(req.body?.gst_type),
         description: description ?? null,
         created_by: req.user!.sub,
         lines: Array.isArray(lines) ? lines : [],

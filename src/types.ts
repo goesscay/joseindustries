@@ -160,6 +160,7 @@ export interface DocumentItem {
 
 export interface DocumentRecord {
   id: number;
+  gst_type: GstType;
   doc_type: DocType;
   doc_number: string;
   financial_year: string;
@@ -220,6 +221,7 @@ export type PaymentMode = "cash" | "cheque" | "bank_transfer" | "upi" | "card" |
 
 export interface Receipt {
   id: number;
+  gst_type: GstType;
   receipt_no: string;
   financial_year: string;
   company_id: number;
@@ -576,6 +578,13 @@ export interface ChartOfAccount {
 
 export type JournalStatus = "posted" | "reversed";
 
+/** "With GST" ('gst') or "Without GST" ('non_gst') books - see schema.sql. */
+export type GstType = "gst" | "non_gst";
+
+export function parseGstType(value: unknown, fallback: GstType = "gst"): GstType {
+  return value === "non_gst" ? "non_gst" : value === "gst" ? "gst" : fallback;
+}
+
 export interface Journal {
   id: number;
   company_id: number;
@@ -586,6 +595,7 @@ export interface Journal {
   description: string | null;
   status: JournalStatus;
   reverses_journal_id: number | null;
+  gst_type: GstType;
   created_by: number | null;
   created_at: string;
 }
@@ -618,6 +628,9 @@ export interface CreateJournalInput {
   source_id?: number | null;
   description?: string | null;
   created_by?: number | null;
+  /** Explicit book for this journal. When omitted it is derived from the
+   * source record (see accounting.ts resolveJournalGstType), else 'gst'. */
+  gst_type?: GstType;
   lines: JournalLineInput[];
 }
 

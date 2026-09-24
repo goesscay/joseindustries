@@ -41,7 +41,9 @@ import {
   TermsTemplate,
   TermsTemplateDocType,
   InsufficientStockItem,
+  GstType,
 } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 const PAGE_SIZE = 10;
 
@@ -148,6 +150,7 @@ export function SalesDocumentPage({
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<number | undefined>();
+  const [gstFilter, setGstFilter] = useState<GstType | undefined>();
   const [loading, setLoading] = useState(false);
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -171,6 +174,9 @@ export function SalesDocumentPage({
   const companyWatch = Form.useWatch("company_id", form) as number | undefined;
   const customerWatch = Form.useWatch("customer_id", form) as number | undefined;
   const templateStyleWatch = Form.useWatch("template_style", form) as string | undefined;
+  const gstTypeWatch = Form.useWatch("gst_type", form) as GstType | undefined;
+  // "Without GST" documents charge no tax: the tax column is locked at 0.
+  const nonGst = gstTypeWatch === "non_gst";
   // Which PDF templates this document type can use, and the name shown for each.
   const [templateOptions, setTemplateOptions] = useState<string[]>([]);
   const measuredMode = templateStyleWatch === "classic_measured";
@@ -183,7 +189,7 @@ export function SalesDocumentPage({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const companyParam = companyFilter ? `&company_id=${companyFilter}` : "";
+      const companyParam = (companyFilter ? `&company_id=${companyFilter}` : "") + (gstFilter ? `&gst_type=${gstFilter}` : "");
       const res = await api.get<{ data: SalesDocument[]; meta: { total: number } }>(
         `${apiPath}?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}${companyParam}`
       );
@@ -194,7 +200,7 @@ export function SalesDocumentPage({
     } finally {
       setLoading(false);
     }
-  }, [apiPath, page, search, companyFilter, pluralTitle]);
+  }, [apiPath, page, search, companyFilter, gstFilter, pluralTitle]);
 
   useEffect(() => {
     load();
@@ -255,7 +261,7 @@ export function SalesDocumentPage({
       const qty = effectiveQty(line);
       const rate = Number(line?.rate) || 0;
       const discountPercent = Number(line?.discount_percent) || 0;
-      const taxRate = Number(line?.tax_rate) || 0;
+      const taxRate = nonGst ? 0 : Number(line?.tax_rate) || 0;
       const base = round2(qty * rate);
       const discount = round2((base * discountPercent) / 100);
       const taxable = round2(base - discount);
@@ -287,6 +293,7 @@ export function SalesDocumentPage({
       applicableTemplates.find((t) => t.is_default);
     form.setFieldsValue({
       issue_date: dayjs(),
+      gst_type: gstFilter ?? "gst",
       company_id: companies[0]?.id,
       reverse_charge: false,
       freight_charges: 0,
@@ -307,6 +314,7 @@ export function SalesDocumentPage({
   function fillFormFrom(doc: SalesDocument, docItems: DocumentLineItem[], issueDate: dayjs.Dayjs, keepTemplate = false) {
     const values: Record<string, unknown> = {
       company_id: doc.company_id,
+      gst_type: doc.gst_type || "gst",
       customer_id: doc.customer_id,
       issue_date: issueDate,
       notes: doc.notes,
@@ -415,7 +423,7 @@ export function SalesDocumentPage({
       hsn_code: item.hsn_code,
       unit: item.unit,
       rate: Number(item.default_rate),
-      tax_rate: Number(item.tax_rate),
+      tax_rate: nonGst ? 0 : Number(item.tax_rate),
     };
     form.setFieldsValue({ items: current });
   }
@@ -532,6 +540,13 @@ export function SalesDocumentPage({
   const columns: ColumnsType<SalesDocument> = [
     { title: "No.", dataIndex: "doc_number", key: "doc_number" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
+    {
+      title: "GST",
+      dataIndex: "gst_type",
+      key: "gst_type",
+      width: 100,
+      render: (v: GstType | undefined) => (v === "non_gst" ? <Tag color="orange">Without GST</Tag> : <Tag color="green">With GST</Tag>),
+    },
     { title: "Customer", dataIndex: "customer_name", key: "customer_name" },
     {
       title: "Date",
@@ -641,6 +656,17 @@ export function SalesDocumentPage({
             }}
             style={{ width: 180 }}
           />
+          <Select
+            placeholder="With / Without GST"
+            allowClear
+            value={gstFilter}
+            options={GST_TYPE_OPTIONS}
+            onChange={(value) => {
+              setPage(1);
+              setGstFilter(value);
+            }}
+            style={{ width: 170 }}
+          />
           <Input.Search
             placeholder="Search number or customer"
             allowClear
@@ -738,6 +764,27 @@ export function SalesDocumentPage({
                 })()}
               </Col>
             )}
+            <Col xs={24} sm={8}>
+              <Form.Item
+                name="gst_type"
+                label="GST"
+                extra={
+                  editingDoc || convertTarget
+                    ? "Fixed for this document."
+                    : "Without GST: no tax is charged and it is booked separately from GST transactions, with its own numbering."
+                }
+              >
+                <Select
+                  options={GST_TYPE_OPTIONS}
+                  disabled={!!editingDoc || !!convertTarget}
+                  onChange={(value: GstType) => {
+                    if (value !== "non_gst") return;
+                    const current = (form.getFieldValue("items") || []).map((it: DocumentLineItem) => ({ ...it, tax_rate: 0 }));
+                    form.setFieldsValue({ items: current });
+                  }}
+                />
+              </Form.Item>
+            </Col>
             {templateOptions.length > 1 && (
               <Col xs={24} sm={8}>
                 <Form.Item
@@ -961,7 +1008,7 @@ export function SalesDocumentPage({
                           const base = line.line_kind === "heading" ? 0 : round2(effectiveQty(line) * (Number(line.rate) || 0));
                           const discount = round2((base * (Number(line.discount_percent) || 0)) / 100);
                           const taxable = round2(base - discount);
-                          const tax = round2((taxable * (Number(line.tax_rate) || 0)) / 100);
+                          const tax = nonGst ? 0 : round2((taxable * (Number(line.tax_rate) || 0)) / 100);
                           lineTotal = round2(taxable + tax);
                         }
                         const isHeading = line?.line_kind === "heading";
@@ -1065,7 +1112,7 @@ export function SalesDocumentPage({
                             <td>
                               {!isHeading && (
                                 <Form.Item name={[name, "tax_rate"]} style={{ marginBottom: 0 }}>
-                                  <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} />
+                                  <InputNumber size="small" min={0} max={100} disabled={nonGst} style={{ width: "100%" }} />
                                 </Form.Item>
                               )}
                             </td>
@@ -1127,7 +1174,7 @@ export function SalesDocumentPage({
                       unit: "pcs",
                       rate: 0,
                       discount_percent: 0,
-                      tax_rate: 18,
+                      tax_rate: nonGst ? 0 : 18,
                       line_kind: "item",
                     })
                   }

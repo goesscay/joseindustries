@@ -31,7 +31,9 @@ import {
   PurchaseOrder,
   PurchaseOrderItem,
   Vendor,
+  GstType,
 } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 const PAGE_SIZE = 10;
 
@@ -87,6 +89,9 @@ export function PurchaseBillsPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const lineItems = Form.useWatch("items", form) as LineFormValue[] | undefined;
+  const gstTypeWatch = Form.useWatch("gst_type", form) as GstType | undefined;
+  // "Without GST" bills carry no input tax.
+  const nonGst = gstTypeWatch === "non_gst";
 
   const canCreate = can("purchases.bills", "create");
   const canEdit = can("purchases.bills", "edit");
@@ -143,7 +148,7 @@ export function PurchaseBillsPage() {
     (lineItems || []).forEach((line) => {
       const qty = Number(line?.qty) || 0;
       const rate = Number(line?.rate) || 0;
-      const taxRate = Number(line?.tax_rate) || 0;
+      const taxRate = nonGst ? 0 : Number(line?.tax_rate) || 0;
       const taxable = round2(qty * rate);
       subtotal += taxable;
       tax += round2((taxable * taxRate) / 100);
@@ -151,7 +156,7 @@ export function PurchaseBillsPage() {
     subtotal = round2(subtotal);
     tax = round2(tax);
     return { subtotal, tax, total: round2(subtotal + tax) };
-  }, [lineItems]);
+  }, [lineItems, nonGst]);
 
   function openCreate() {
     setEditing(null);
@@ -159,6 +164,7 @@ export function PurchaseBillsPage() {
     form.resetFields();
     form.setFieldsValue({
       bill_date: dayjs(),
+      gst_type: "gst",
       company_id: companies[0]?.id,
       status: "draft",
       items: [{ item_id: null, description: "", hsn_code: "", qty: 1, unit: "pcs", rate: 0, tax_rate: 18 }],
@@ -173,6 +179,7 @@ export function PurchaseBillsPage() {
     form.resetFields();
     form.setFieldsValue({
       company_id: order.company_id,
+      gst_type: "gst",
       vendor_id: order.vendor_id,
       bill_date: dayjs(),
       reference_no: order.reference_no,
@@ -211,6 +218,7 @@ export function PurchaseBillsPage() {
       setConvertingFromPO(null);
       form.setFieldsValue({
         company_id: res.bill.company_id,
+        gst_type: res.bill.gst_type || "gst",
         vendor_id: res.bill.vendor_id,
         bill_date: dayjs(res.bill.bill_date),
         due_date: res.bill.due_date ? dayjs(res.bill.due_date) : undefined,
@@ -295,6 +303,13 @@ export function PurchaseBillsPage() {
   const columns: ColumnsType<PurchaseBill> = [
     { title: "No.", dataIndex: "bill_no", key: "bill_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
+    {
+      title: "GST",
+      dataIndex: "gst_type",
+      key: "gst_type",
+      width: 100,
+      render: (v: GstType | undefined) => (v === "non_gst" ? <Tag color="orange">Without GST</Tag> : <Tag color="green">With GST</Tag>),
+    },
     { title: "Vendor", dataIndex: "vendor_name", key: "vendor_name" },
     {
       title: "Purchase Order",
@@ -424,6 +439,15 @@ export function PurchaseBillsPage() {
                 options={companies.map((c) => ({ value: c.id, label: c.name }))}
               />
             </Form.Item>
+            <Form.Item name="gst_type" label="GST" extra="Without GST bills carry no input tax and are booked separately.">
+              <Select
+                options={GST_TYPE_OPTIONS}
+                onChange={(v: GstType) => {
+                  if (v !== "non_gst") return;
+                  form.setFieldsValue({ items: (form.getFieldValue("items") || []).map((it: LineFormValue) => ({ ...it, tax_rate: 0 })) });
+                }}
+              />
+            </Form.Item>
             <Form.Item
               name="vendor_id"
               label="Vendor"
@@ -488,7 +512,7 @@ export function PurchaseBillsPage() {
                         let lineTotal = 0;
                         if (line) {
                           const taxable = round2((Number(line.qty) || 0) * (Number(line.rate) || 0));
-                          const tax = round2((taxable * (Number(line.tax_rate) || 0)) / 100);
+                          const tax = nonGst ? 0 : round2((taxable * (Number(line.tax_rate) || 0)) / 100);
                           lineTotal = round2(taxable + tax);
                         }
                         return (
@@ -532,7 +556,7 @@ export function PurchaseBillsPage() {
                             </td>
                             <td>
                               <Form.Item name={[name, "tax_rate"]} style={{ marginBottom: 0 }}>
-                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} disabled={!!convertingFromPO} />
+                                <InputNumber size="small" min={0} max={100} style={{ width: "100%" }} disabled={!!convertingFromPO || nonGst} />
                               </Form.Item>
                             </td>
                             <td style={{ whiteSpace: "nowrap" }}>{lineTotal.toFixed(2)}</td>

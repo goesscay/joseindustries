@@ -50,7 +50,7 @@ const COLS = {
  * every page, and a row is never split across a page boundary.
  */
 export function streamPartyLedgerPdf(res: Response, report: PartyLedgerReport, from: string, to: string) {
-  const { party, partyType, openingBalance, entries, closingBalance } = report;
+  const { party, partyType, gstFilter, openingBalance, entries, closingBalance } = report;
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN });
   const safeName = party.name.replace(/[^a-z0-9]+/gi, "-");
   res.setHeader("Content-Type", "application/pdf");
@@ -69,7 +69,7 @@ export function streamPartyLedgerPdf(res: Response, report: PartyLedgerReport, f
       // Logo missing - skip silently.
     }
     doc.fontSize(15).fillColor(DARK).font("Helvetica-Bold").text("PARTY LEDGER", CONTENT_LEFT + logoSize + 10, y, { width: 260 });
-    doc.font("Helvetica").fontSize(8).fillColor(MUTED).text("Statement of account", CONTENT_LEFT + logoSize + 10, doc.y);
+    doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(gstFilter === "gst" ? "Statement of account - With GST transactions" : gstFilter === "non_gst" ? "Statement of account - Without GST transactions" : "Statement of account", CONTENT_LEFT + logoSize + 10, doc.y);
 
     doc.fontSize(8).fillColor(MUTED).text(`Page ${page}`, CONTENT_RIGHT - 100, PAGE_MARGIN, { width: 100, align: "right" });
     doc

@@ -6,7 +6,8 @@ import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { RemoteSelect } from "../components/RemoteSelect";
-import { Company, Expense, ExpenseCategory, Vendor } from "../types";
+import { Company, Expense, ExpenseCategory, GstType, Vendor } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 const PAGE_SIZE = 10;
 
@@ -26,6 +27,7 @@ export function ExpensesPage() {
   const [editing, setEditing] = useState<Expense | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  const gstTypeWatch = Form.useWatch("gst_type", form) as GstType | undefined;
 
   const canCreate = can("expenses.expenses", "create");
   const canEdit = can("expenses.expenses", "edit");
@@ -79,6 +81,7 @@ export function ExpensesPage() {
     form.resetFields();
     form.setFieldsValue({
       expense_date: dayjs(),
+      gst_type: "gst",
       company_id: companies[0]?.id,
       amount: 0,
       tax_amount: 0,
@@ -91,6 +94,7 @@ export function ExpensesPage() {
     setEditing(record);
     form.setFieldsValue({
       company_id: record.company_id,
+      gst_type: record.gst_type || "gst",
       vendor_id: record.vendor_id,
       category_id: record.category_id,
       expense_date: dayjs(record.expense_date),
@@ -137,6 +141,13 @@ export function ExpensesPage() {
   const columns: ColumnsType<Expense> = [
     { title: "No.", dataIndex: "expense_no", key: "expense_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
+    {
+      title: "GST",
+      dataIndex: "gst_type",
+      key: "gst_type",
+      width: 100,
+      render: (v: GstType | undefined) => (v === "non_gst" ? <Tag color="orange">Without GST</Tag> : <Tag color="green">With GST</Tag>),
+    },
     { title: "Vendor", dataIndex: "vendor_name", key: "vendor_name", render: (v) => v || "-" },
     { title: "Category", dataIndex: "category_name", key: "category_name", render: (v) => v || "-" },
     {
@@ -232,6 +243,9 @@ export function ExpensesPage() {
           <Form.Item name="company_id" label="Company" rules={[{ required: true, message: "Company is required" }]}>
             <Select placeholder="Select company" options={companies.map((c) => ({ value: c.id, label: c.name }))} />
           </Form.Item>
+          <Form.Item name="gst_type" label="GST" extra="Without GST transactions are booked separately from GST transactions.">
+            <Select options={GST_TYPE_OPTIONS} onChange={(v: GstType) => v === "non_gst" && form.setFieldsValue({ tax_amount: 0 })} />
+          </Form.Item>
           <Form.Item name="vendor_id" label="Vendor (optional)">
             <RemoteSelect<Vendor>
               allowClear
@@ -261,7 +275,7 @@ export function ExpensesPage() {
               <InputNumber style={{ width: "100%" }} min={0} />
             </Form.Item>
             <Form.Item name="tax_amount" label="Tax (GST) Amount" style={{ width: "50%", marginBottom: 0 }}>
-              <InputNumber style={{ width: "100%" }} min={0} />
+              <InputNumber style={{ width: "100%" }} min={0} disabled={gstTypeWatch === "non_gst"} />
             </Form.Item>
           </Space.Compact>
           <Form.Item name="expense_date" label="Date" rules={[{ required: true, message: "Date is required" }]} style={{ marginTop: 16 }}>

@@ -21,7 +21,8 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, SwapOutlined, BookOutlined 
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { Account, AccountType, ChartOfAccount, Company, JournalDirection, LedgerEntry } from "../types";
+import { Account, AccountType, ChartOfAccount, Company, GstType, JournalDirection, LedgerEntry } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 function formatMoney(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -205,7 +206,7 @@ export function AccountsPage() {
 
   function openAddEntry() {
     entryForm.resetFields();
-    entryForm.setFieldsValue({ entry_date: dayjs(), direction: "out" });
+    entryForm.setFieldsValue({ entry_date: dayjs(), direction: "out", gst_type: "gst" });
     setEntryModalOpen(true);
   }
 
@@ -222,6 +223,7 @@ export function AccountsPage() {
         amount: values.amount,
         particulars: values.particulars,
         notes: values.notes,
+        gst_type: values.gst_type as GstType,
       });
       message.success("Journal entry added");
       setEntryModalOpen(false);
@@ -464,6 +466,9 @@ export function AccountsPage() {
         destroyOnClose
       >
         <Form form={entryForm} layout="vertical" size="middle">
+          <Form.Item name="gst_type" label="GST" extra="Without GST entries are tracked separately from GST transactions.">
+            <Select options={GST_TYPE_OPTIONS} />
+          </Form.Item>
           <Form.Item name="direction" label="Direction" rules={[{ required: true }]}>
             <Radio.Group options={[{ label: "Money In", value: "in" as JournalDirection }, { label: "Money Out", value: "out" as JournalDirection }]} />
           </Form.Item>

@@ -13,7 +13,7 @@ import {
   postDocumentStockMovementTx,
   reverseStockForSourceTx,
 } from "../services/inventory";
-import { Company, Journal, PurchaseBill, PurchaseBillItem, Vendor } from "../types";
+import { GstType, parseGstType, Company, Journal, PurchaseBill, PurchaseBillItem, Vendor } from "../types";
 
 // Purchase Bills - the first real purchase-side document (Phase 7A).
 // Deliberately its own router/tables, not a doc_type on the Sales module's
@@ -57,14 +57,15 @@ class ValidationError extends Error {
   status = 400;
 }
 
-function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
+function validateAndNormalizeLines(rawItems: unknown, gstType: GstType = "gst"): NormalizedLine[] {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ValidationError("At least one line item is required");
   }
   return rawItems.map((raw) => {
     const qty = Number(raw.qty);
     const rate = Number(raw.rate);
-    const tax_rate = Number(raw.tax_rate ?? 0);
+    // A "Without GST" bill carries no input tax.
+    const tax_rate = gstType === "non_gst" ? 0 : Number(raw.tax_rate ?? 0);
     if (!raw.description || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(rate) || rate < 0) {
       throw new ValidationError("Each line item needs a description, positive qty, and rate");
     }
@@ -122,7 +123,7 @@ async function validatePayload(body: any) {
 
   let lines: NormalizedLine[];
   try {
-    lines = validateAndNormalizeLines(items);
+    lines = validateAndNormalizeLines(items, parseGstType(body?.gst_type));
   } catch (err) {
     if (err instanceof ValidationError) return { error: err.message };
     throw err;
@@ -253,6 +254,7 @@ purchaseBillsRouter.post(
   requireModuleAccess(MODULE, "create"),
   asyncHandler(async (req, res) => {
     const { company_id, purchase_order_id, bill_date, due_date, reference_no, notes } = req.body ?? {};
+    const gstType = parseGstType(req.body?.gst_type);
     if (!company_id || !bill_date) {
       return res.status(400).json({ message: "company_id and bill_date are required" });
     }
@@ -277,6 +279,7 @@ purchaseBillsRouter.post(
         }
         vendorId = poResult.vendorId;
         lines = poResult.lines;
+        if (gstType === "non_gst") lines = lines.map((l) => ({ ...l, tax_rate: 0 }));
         sourcePurchaseOrderId = poResult.po.id;
       } else {
         const result = await validatePayload(req.body);
@@ -300,13 +303,13 @@ purchaseBillsRouter.post(
       taxAmount = Math.round(taxAmount * 100) / 100;
       const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
 
-      const { docNumber, financialYear } = await getNextDocNumber("purchase_bill", company.code, new Date(bill_date));
+      const { docNumber, financialYear } = await getNextDocNumber("purchase_bill", company.code, new Date(bill_date), gstType);
 
       const [insertResult] = await conn.query<any>(
         `INSERT INTO purchase_bills
            (bill_no, financial_year, company_id, vendor_id, purchase_order_id, status, bill_date, due_date,
-            reference_no, notes, subtotal, tax_amount, total_amount, created_by)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+            reference_no, notes, subtotal, tax_amount, total_amount, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -321,6 +324,7 @@ purchaseBillsRouter.post(
           taxAmount,
           totalAmount,
           req.user!.sub,
+          gstType,
         ]
       );
       const billId = insertResult.insertId;
@@ -424,7 +428,7 @@ purchaseBillsRouter.put(
       await conn.query(
         `UPDATE purchase_bills SET
            company_id = ?, vendor_id = ?, purchase_order_id = ?, status = ?, bill_date = ?, due_date = ?,
-           reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?
+           reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?, gst_type = ?
          WHERE id = ?`,
         [
           req.body.company_id,
@@ -438,6 +442,7 @@ purchaseBillsRouter.put(
           subtotal,
           taxAmount,
           totalAmount,
+          parseGstType(req.body?.gst_type),
           id,
         ]
       );

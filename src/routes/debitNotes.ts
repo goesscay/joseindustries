@@ -234,13 +234,13 @@ debitNotesRouter.post(
       taxAmount = round2(taxAmount);
       const totalAmount = round2(subtotal + taxAmount);
 
-      const { docNumber, financialYear } = await getNextDocNumber("debit_note", company.code, new Date(issue_date));
+      const { docNumber, financialYear } = await getNextDocNumber("debit_note", company.code, new Date(issue_date), bill.gst_type === "non_gst" ? "non_gst" : "gst");
 
       const [result] = await conn.query<any>(
         `INSERT INTO debit_notes
            (debit_note_no, financial_year, company_id, vendor_id, purchase_bill_id, status, issue_date, reason, notes,
-            subtotal, tax_amount, total_amount, created_by)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+            subtotal, tax_amount, total_amount, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -254,6 +254,8 @@ debitNotesRouter.post(
           taxAmount,
           totalAmount,
           req.user!.sub,
+          // A debit note stays in the same GST book as the bill it corrects.
+          bill.gst_type === "non_gst" ? "non_gst" : "gst",
         ]
       );
       const debitNoteId = result.insertId;

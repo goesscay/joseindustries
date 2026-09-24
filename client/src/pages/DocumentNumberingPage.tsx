@@ -6,7 +6,8 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { DocCounter } from "../types";
 
-const DOC_TYPE_LABELS: Record<string, string> = {
+// Counter keys for "Without GST" series carry an "_ng" suffix.
+const BASE_DOC_TYPE_LABELS: Record<string, string> = {
   quotation: "Quotation",
   proforma_invoice: "Proforma Invoice",
   delivery_challan: "Delivery Challan",
@@ -15,6 +16,10 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   expense: "Expense",
   vendor_payment: "Vendor Payment",
 };
+const DOC_TYPE_LABELS: Record<string, string> = new Proxy(BASE_DOC_TYPE_LABELS, {
+  get: (target, key: string) =>
+    target[key] ?? (key.endsWith("_ng") && target[key.slice(0, -3)] ? `${target[key.slice(0, -3)]} (Without GST)` : undefined),
+});
 
 export function DocumentNumberingPage() {
   const { user } = useAuth();

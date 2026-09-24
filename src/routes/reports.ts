@@ -115,6 +115,11 @@ reportsRouter.get(
   })
 );
 
+// ?gst_type=gst|non_gst limits a statement to one GST book; omitted = all.
+function gstFilterOf(query: any): "all" | "gst" | "non_gst" {
+  return query.gst_type === "gst" || query.gst_type === "non_gst" ? query.gst_type : "all";
+}
+
 // ---- Party Ledger: statement for one customer (Tax Invoices raise what
 // they owe us, Receipts reduce it) or one vendor (Expenses raise what we
 // owe them, Vendor Payments reduce it). Both this JSON route and the /pdf
@@ -132,7 +137,7 @@ reportsRouter.get(
     if (!partyId) return res.status(400).json({ message: "id is required" });
 
     try {
-      const { party, openingBalance, entries, closingBalance } = await getPartyLedgerReport(partyType, partyId, from, to);
+      const { party, openingBalance, entries, closingBalance } = await getPartyLedgerReport(partyType, partyId, from, to, gstFilterOf(req.query));
       res.json({ party, openingBalance, entries, closingBalance });
     } catch (err) {
       if (err instanceof PartyLedgerError) {
@@ -160,7 +165,7 @@ reportsRouter.get(
     if (!partyId) return res.status(400).json({ message: "id is required" });
 
     try {
-      const report = await getPartyLedgerReport(partyType, partyId, from, to);
+      const report = await getPartyLedgerReport(partyType, partyId, from, to, gstFilterOf(req.query));
       streamPartyLedgerPdf(res, report, from, to);
     } catch (err) {
       if (err instanceof PartyLedgerError) {

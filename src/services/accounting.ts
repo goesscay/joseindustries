@@ -9,6 +9,7 @@ import {
   JournalStatus,
   LedgerAccountType,
   NormalBalance,
+  GstType,
 } from "../types";
 
 /** Thrown for any accounting-rule violation (unbalanced journal, negative
@@ -280,6 +281,30 @@ async function getLockedThroughDate(companyId: number, conn: PoolConnection): Pr
   return rows[0]?.end_date ?? null;
 }
 
+// Journals inherit their GST book from the record that posted them, so
+// every ledger report can filter on journals.gst_type alone. Sources with no
+// entry here (manual journals, fixed assets, transfers...) are 'gst' unless
+// the caller passes gst_type explicitly.
+const GST_TYPE_SOURCE_TABLES: Record<string, string> = {
+  tax_invoice: "documents",
+  tax_invoice_cogs: "documents",
+  receipt: "receipts",
+  expense: "expenses",
+  vendor_payment: "vendor_payments",
+  purchase_bill: "purchase_bills",
+  credit_note: "credit_notes",
+  credit_note_stock: "credit_notes",
+  debit_note: "debit_notes",
+};
+
+async function resolveJournalGstType(conn: PoolConnection, input: CreateJournalInput): Promise<"gst" | "non_gst"> {
+  if (input.gst_type === "non_gst" || input.gst_type === "gst") return input.gst_type;
+  const table = input.source_type ? GST_TYPE_SOURCE_TABLES[input.source_type] : undefined;
+  if (!table || !input.source_id) return "gst";
+  const [rows] = await conn.query<any[]>(`SELECT gst_type FROM ${table} WHERE id = ?`, [input.source_id]);
+  return rows[0]?.gst_type === "non_gst" ? "non_gst" : "gst";
+}
+
 /**
  * Core validate-and-insert logic shared by createJournal() and
  * createJournalTx() - assumes `conn` is already inside a transaction that
@@ -321,9 +346,10 @@ async function insertJournalRows(conn: PoolConnection, input: CreateJournalInput
     }
   }
 
+  const gstType = await resolveJournalGstType(conn, input);
   const [journalResult] = await conn.query<any>(
-    `INSERT INTO journals (company_id, journal_date, reference, source_type, source_id, description, status, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, 'posted', ?)`,
+    `INSERT INTO journals (company_id, journal_date, reference, source_type, source_id, description, status, created_by, gst_type)
+     VALUES (?, ?, ?, ?, ?, ?, 'posted', ?, ?)`,
     [
       input.company_id,
       input.journal_date,
@@ -332,6 +358,7 @@ async function insertJournalRows(conn: PoolConnection, input: CreateJournalInput
       input.source_id || null,
       input.description || null,
       input.created_by || null,
+      gstType,
     ]
   );
   const journalId = journalResult.insertId;
@@ -419,8 +446,8 @@ async function insertReversalRows(conn: PoolConnection, journalId: number, userI
   validateJournalLines(reversedLines);
 
   const [journalResult] = await conn.query<any>(
-    `INSERT INTO journals (company_id, journal_date, reference, source_type, source_id, description, status, reverses_journal_id, created_by)
-     VALUES (?, CURDATE(), ?, ?, ?, ?, 'posted', ?, ?)`,
+    `INSERT INTO journals (company_id, journal_date, reference, source_type, source_id, description, status, reverses_journal_id, created_by, gst_type)
+     VALUES (?, CURDATE(), ?, ?, ?, ?, 'posted', ?, ?, ?)`,
     [
       original.company_id,
       original.reference,
@@ -429,6 +456,7 @@ async function insertReversalRows(conn: PoolConnection, journalId: number, userI
       original.description ? `Reversal of: ${original.description}` : `Reversal of journal #${original.id}`,
       original.id,
       userId,
+      original.gst_type === "non_gst" ? "non_gst" : "gst",
     ]
   );
   const reversalId = journalResult.insertId;
@@ -1404,6 +1432,7 @@ export interface PostBankCashEntryJournalInput {
   particulars: string;
   notes?: string | null;
   createdBy: number | null;
+  gstType?: GstType;
 }
 
 /** journals.description is VARCHAR(255) - folds an optional free-text note
@@ -1439,6 +1468,7 @@ export async function postBankCashEntryJournalTx(
     reference: null,
     source_type: "bank_cash_entry",
     source_id: null,
+    gst_type: input.gstType,
     description,
     created_by: input.createdBy,
     lines: [
@@ -1767,7 +1797,7 @@ export async function getAccountBalance(accountId: number, asOfDate?: string): P
  * the requested range is zero (Phase 5, Step 3). Signed the same way as
  * getAccountBalance.
  */
-export async function getAccountOpeningBalance(accountId: number, beforeDate: string): Promise<number> {
+export async function getAccountOpeningBalance(accountId: number, beforeDate: string, gstType?: GstType): Promise<number> {
   const [accountRows] = await pool.query<any[]>("SELECT * FROM chart_of_accounts WHERE id = ?", [accountId]);
   const account = accountRows[0] as ChartOfAccount | undefined;
   if (!account) throw new AccountingError("Account not found");
@@ -1776,8 +1806,8 @@ export async function getAccountOpeningBalance(accountId: number, beforeDate: st
     `SELECT COALESCE(SUM(jl.debit), 0) as total_debit, COALESCE(SUM(jl.credit), 0) as total_credit
      FROM journal_lines jl
      JOIN journals j ON j.id = jl.journal_id
-     WHERE jl.account_id = ? AND j.journal_date < ?`,
-    [accountId, beforeDate]
+     WHERE jl.account_id = ? AND j.journal_date < ? ${gstType ? "AND j.gst_type = ?" : ""}`,
+    gstType ? [accountId, beforeDate, gstType] : [accountId, beforeDate]
   );
   const totalDebit = Number(rows[0].total_debit);
   const totalCredit = Number(rows[0].total_credit);
@@ -1785,6 +1815,8 @@ export async function getAccountOpeningBalance(accountId: number, beforeDate: st
 }
 
 export interface GetLedgerOptions {
+  /** Restrict to one GST book; omitted = every journal (all books). */
+  gstType?: GstType;
   sourceType?: string;
   reference?: string;
 }
@@ -1808,7 +1840,7 @@ export async function getLedger(accountId: number, from?: string, to?: string, o
   const account = accountRows[0] as ChartOfAccount | undefined;
   if (!account) throw new AccountingError("Account not found");
 
-  const openingBalance = from ? await getAccountOpeningBalance(accountId, from) : 0;
+  const openingBalance = from ? await getAccountOpeningBalance(accountId, from, options.gstType) : 0;
 
   const clauses = ["jl.account_id = ?"];
   const params: unknown[] = [accountId];
@@ -1819,6 +1851,10 @@ export async function getLedger(accountId: number, from?: string, to?: string, o
   if (to) {
     clauses.push("j.journal_date <= ?");
     params.push(to);
+  }
+  if (options.gstType) {
+    clauses.push("j.gst_type = ?");
+    params.push(options.gstType);
   }
   if (options.sourceType) {
     clauses.push("j.source_type = ?");
@@ -1901,6 +1937,7 @@ export async function getGeneralLedger(input: GetGeneralLedgerInput) {
   const result = await getLedger(input.accountId, input.from, input.to, {
     sourceType: input.sourceType,
     reference: input.reference,
+    gstType: input.gstType,
   });
   return { ...result, from: input.from, to: input.to };
 }
@@ -1961,7 +1998,7 @@ export interface TrialBalanceResult {
  * WHERE clause (the same safe shape getAccountBalance/
  * getAccountOpeningBalance already use) closes this off correctly.
  */
-export async function getTrialBalance(companyId: number, asOfDate: string): Promise<TrialBalanceResult> {
+export async function getTrialBalance(companyId: number, asOfDate: string, gstType?: GstType): Promise<TrialBalanceResult> {
   const [rows] = await pool.query<any[]>(
     `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category, coa.normal_balance,
             COALESCE(agg.total_debit, 0) - COALESCE(agg.total_credit, 0) as net
@@ -1970,13 +2007,13 @@ export async function getTrialBalance(companyId: number, asOfDate: string): Prom
        SELECT jl.account_id, SUM(jl.debit) as total_debit, SUM(jl.credit) as total_credit
        FROM journal_lines jl
        JOIN journals j ON j.id = jl.journal_id
-       WHERE j.journal_date <= ?
+       WHERE j.journal_date <= ? ${gstType ? "AND j.gst_type = ?" : ""}
        GROUP BY jl.account_id
      ) agg ON agg.account_id = coa.id
      WHERE coa.company_id = ? AND coa.is_active = 1
        AND (COALESCE(agg.total_debit, 0) <> 0 OR COALESCE(agg.total_credit, 0) <> 0)
      ORDER BY coa.account_code ASC`,
-    [asOfDate, companyId]
+    gstType ? [asOfDate, gstType, companyId] : [asOfDate, companyId]
   );
 
   const tbRows: TrialBalanceRow[] = rows.map((r) => {
@@ -2061,7 +2098,7 @@ export interface ProfitAndLossResult {
  * clause (the same safe shape getAccountBalance/getAccountOpeningBalance
  * already use) closes this off correctly.
  */
-export async function getProfitAndLoss(companyId: number, from: string, to: string): Promise<ProfitAndLossResult> {
+export async function getProfitAndLoss(companyId: number, from: string, to: string, gstType?: GstType): Promise<ProfitAndLossResult> {
   const [rows] = await pool.query<any[]>(
     `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category,
             COALESCE(agg.total_debit, 0) as total_debit, COALESCE(agg.total_credit, 0) as total_credit
@@ -2070,13 +2107,13 @@ export async function getProfitAndLoss(companyId: number, from: string, to: stri
        SELECT jl.account_id, SUM(jl.debit) as total_debit, SUM(jl.credit) as total_credit
        FROM journal_lines jl
        JOIN journals j ON j.id = jl.journal_id
-       WHERE j.journal_date BETWEEN ? AND ?
+       WHERE j.journal_date BETWEEN ? AND ? ${gstType ? "AND j.gst_type = ?" : ""}
        GROUP BY jl.account_id
      ) agg ON agg.account_id = coa.id
      WHERE coa.company_id = ? AND coa.is_active = 1 AND coa.account_type IN ('revenue', 'expense')
        AND (COALESCE(agg.total_debit, 0) <> 0 OR COALESCE(agg.total_credit, 0) <> 0)
      ORDER BY coa.account_code ASC`,
-    [from, to, companyId]
+    gstType ? [from, to, gstType, companyId] : [from, to, companyId]
   );
 
   const income: ProfitAndLossRow[] = [];
@@ -2196,7 +2233,7 @@ export interface BalanceSheetResult {
  * clause (the same safe shape getAccountBalance/getAccountOpeningBalance
  * already use) closes this off correctly.
  */
-export async function getBalanceSheet(companyId: number, asOfDate: string): Promise<BalanceSheetResult> {
+export async function getBalanceSheet(companyId: number, asOfDate: string, gstType?: GstType): Promise<BalanceSheetResult> {
   const [rows] = await pool.query<any[]>(
     `SELECT coa.id as account_id, coa.account_code, coa.name, coa.account_type, coa.category,
             COALESCE(agg.total_debit, 0) - COALESCE(agg.total_credit, 0) as net
@@ -2205,13 +2242,13 @@ export async function getBalanceSheet(companyId: number, asOfDate: string): Prom
        SELECT jl.account_id, SUM(jl.debit) as total_debit, SUM(jl.credit) as total_credit
        FROM journal_lines jl
        JOIN journals j ON j.id = jl.journal_id
-       WHERE j.journal_date <= ?
+       WHERE j.journal_date <= ? ${gstType ? "AND j.gst_type = ?" : ""}
        GROUP BY jl.account_id
      ) agg ON agg.account_id = coa.id
      WHERE coa.company_id = ? AND coa.is_active = 1 AND coa.account_type IN ('asset', 'liability', 'equity')
        AND (COALESCE(agg.total_debit, 0) <> 0 OR COALESCE(agg.total_credit, 0) <> 0)
      ORDER BY coa.account_code ASC`,
-    [asOfDate, companyId]
+    gstType ? [asOfDate, gstType, companyId] : [asOfDate, companyId]
   );
 
   const assets: BalanceSheetRow[] = [];

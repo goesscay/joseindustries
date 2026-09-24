@@ -178,7 +178,11 @@ export interface DocumentLineItem {
 
 export type DocType = "quotation" | "proforma_invoice" | "delivery_challan" | "tax_invoice" | "receipt";
 
+/** "With GST" ('gst') or "Without GST" ('non_gst') books. */
+export type GstType = "gst" | "non_gst";
+
 export interface SalesDocument {
+  gst_type?: GstType;
   id: number;
   doc_type: DocType;
   doc_number: string;
@@ -242,6 +246,7 @@ export interface SalesDocument {
 export type PaymentMode = "cash" | "cheque" | "bank_transfer" | "upi" | "card" | "other";
 
 export interface Receipt {
+  gst_type?: GstType;
   id: number;
   receipt_no: string;
   financial_year: string;
@@ -309,6 +314,7 @@ export interface ExpenseCategory {
 }
 
 export interface Expense {
+  gst_type?: GstType;
   id: number;
   expense_no: string;
   financial_year: string;
@@ -333,6 +339,7 @@ export interface Expense {
 }
 
 export interface VendorPayment {
+  gst_type?: GstType;
   id: number;
   payment_no: string;
   financial_year: string;
@@ -361,6 +368,7 @@ export interface VendorPayment {
 export type PurchaseBillStatus = "draft" | "received" | "cancelled";
 
 export interface PurchaseBill {
+  gst_type?: GstType;
   id: number;
   bill_no: string;
   financial_year: string;
@@ -612,6 +620,7 @@ export interface ChartOfAccount {
 export type JournalStatus = "posted" | "reversed";
 
 export interface Journal {
+  gst_type?: GstType;
   id: number;
   company_id: number;
   journal_date: string;

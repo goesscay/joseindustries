@@ -26,7 +26,7 @@ import {
   reverseJournalTx,
 } from "../services/accounting";
 import { InsufficientStockError, InventoryError, postDocumentStockMovementTx, reverseStockForSourceTx } from "../services/inventory";
-import { Company, Customer, DocType, DocumentItem, DocumentRecord, Journal, StockTransaction, Role } from "../types";
+import { GstType, parseGstType, Company, Customer, DocType, DocumentItem, DocumentRecord, Journal, StockTransaction, Role } from "../types";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -142,7 +142,7 @@ function optionalDimension(raw: unknown, label: string): number | null {
   return n;
 }
 
-function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
+function validateAndNormalizeLines(rawItems: unknown, gstType: GstType = "gst"): NormalizedLine[] {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ValidationError("At least one line item is required");
   }
@@ -174,7 +174,8 @@ function validateAndNormalizeLines(rawItems: unknown): NormalizedLine[] {
     const pieces = measured ? optionalDimension(raw.pieces, "Pieces") || 1 : optionalDimension(raw.pieces, "Pieces");
     const qty = measured ? round4(height! * length! * pieces!) : Number(raw.qty);
     const rate = Number(raw.rate);
-    const tax_rate = Number(raw.tax_rate ?? 0);
+    // A "Without GST" document charges no tax on any line.
+    const tax_rate = gstType === "non_gst" ? 0 : Number(raw.tax_rate ?? 0);
     const discount_percent = Number(raw.discount_percent ?? 0);
     if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(rate) || rate < 0) {
       throw new ValidationError("Each line item needs a description, positive qty, and rate");
@@ -266,23 +267,26 @@ export function createSalesDocumentRouter(
       const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
       const companyClause = companyId ? "AND d.company_id = ?" : "";
       const companyParams = companyId ? [companyId] : [];
+      const gstFilter = req.query.gst_type === "gst" || req.query.gst_type === "non_gst" ? String(req.query.gst_type) : null;
+      const gstClause = gstFilter ? "AND d.gst_type = ?" : "";
+      const gstParams = gstFilter ? [gstFilter] : [];
 
       const [rows] = await pool.query<any[]>(
         `SELECT d.*, c.name as customer_name, co.name as company_name, co.code as company_code${paymentSelect}
          FROM documents d
          JOIN customers c ON c.id = d.customer_id
          JOIN companies co ON co.id = d.company_id
-         WHERE d.doc_type = ? ${searchClause} ${companyClause}
+         WHERE d.doc_type = ? ${searchClause} ${companyClause} ${gstClause}
          ORDER BY d.issue_date DESC, d.id DESC
          LIMIT ? OFFSET ?`,
-        [docType, ...searchParams, ...companyParams, perPage, offset]
+        [docType, ...searchParams, ...companyParams, ...gstParams, perPage, offset]
       );
       const [countRows] = await pool.query<any[]>(
         `SELECT COUNT(*) as total
          FROM documents d
          JOIN customers c ON c.id = d.customer_id
-         WHERE d.doc_type = ? ${searchClause} ${companyClause}`,
-        [docType, ...searchParams, ...companyParams]
+         WHERE d.doc_type = ? ${searchClause} ${companyClause} ${gstClause}`,
+        [docType, ...searchParams, ...companyParams, ...gstParams]
       );
 
       res.json({ data: rows, meta: { page, perPage, total: countRows[0].total as number } });
@@ -331,6 +335,7 @@ export function createSalesDocumentRouter(
         installation_charges,
         confirm_negative_stock,
         template_style: requestedStyle,
+        gst_type: requestedGstType,
       } = req.body ?? {};
       if (!company_id || !customer_id || !issue_date) {
         return res.status(400).json({ message: "company_id, customer_id and issue_date are required" });
@@ -345,15 +350,23 @@ export function createSalesDocumentRouter(
       if (!customer) return res.status(404).json({ message: "Customer not found" });
 
       let convertedFromId: number | null = null;
+      let sourceGstType: GstType = "gst";
       if (converted_from_id) {
-        const [sourceRows] = await pool.query<any[]>("SELECT id FROM documents WHERE id = ?", [converted_from_id]);
+        const [sourceRows] = await pool.query<any[]>("SELECT id, gst_type FROM documents WHERE id = ?", [converted_from_id]);
         if (!sourceRows[0]) return res.status(404).json({ message: "Source document not found" });
         convertedFromId = Number(converted_from_id);
+        sourceGstType = parseGstType(sourceRows[0].gst_type);
+      }
+
+      // Converting a document carries its GST book across; otherwise the form's choice.
+      const gstType = parseGstType(requestedGstType, sourceGstType);
+      if (converted_from_id && gstType !== sourceGstType) {
+        return res.status(400).json({ message: "A converted document must stay in the same GST book (With GST / Without GST) as its source" });
       }
 
       let lines;
       try {
-        lines = validateAndNormalizeLines(items);
+        lines = validateAndNormalizeLines(items, gstType);
       } catch (err) {
         if (err instanceof ValidationError) return res.status(err.status).json({ message: err.message });
         throw err;
@@ -367,7 +380,7 @@ export function createSalesDocumentRouter(
       const taxTotal = isInterState ? igstTotal : cgstTotal + sgstTotal;
       const optionalFields = pickOptionalTextFields(req.body ?? {});
 
-      const { docNumber, financialYear } = await getNextDocNumber(docType, company.code, new Date(issue_date));
+      const { docNumber, financialYear } = await getNextDocNumber(docType, company.code, new Date(issue_date), gstType);
       // Stamp the PDF template style the settings select *right now* onto
       // this document, so it keeps that look even if the setting (or the
       // list of available styles) changes later.
@@ -394,7 +407,7 @@ export function createSalesDocumentRouter(
               mode_terms_of_payment, other_reference, supplier_reference, terms_and_conditions,
               due_date, credit_period, reverse_charge,
               subtotal, discount_amount, freight_charges, installation_charges,
-              cgst_total, sgst_total, igst_total, tax_total, round_off, grand_total, created_by, template_style)
+              cgst_total, sgst_total, igst_total, tax_total, round_off, grand_total, created_by, template_style, gst_type)
            VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?,
                    ?, ?, ?, ?,
                    ?, ?, ?, ?,
@@ -403,7 +416,7 @@ export function createSalesDocumentRouter(
                    ?, ?, ?, ?,
                    ?, ?, ?,
                    ?, ?, ?, ?,
-                   ?, ?, ?, ?, ?, ?, ?, ?)`,
+                   ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             docType,
             docNumber,
@@ -448,6 +461,7 @@ export function createSalesDocumentRouter(
             grandTotal,
             req.user!.sub,
             templateStyle,
+            gstType,
           ]
         );
         const documentId = result.insertId;
@@ -605,7 +619,7 @@ export function createSalesDocumentRouter(
 
       let lines;
       try {
-        lines = validateAndNormalizeLines(items);
+        lines = validateAndNormalizeLines(items, parseGstType(existing.gst_type));
       } catch (err) {
         if (err instanceof ValidationError) return res.status(err.status).json({ message: err.message });
         throw err;
@@ -946,6 +960,8 @@ export function createSalesDocumentRouter(
       const doc = await findById(id);
       if (!doc) return res.status(404).json({ message: `${title} not found` });
 
+      // A "Without GST" invoice is a plain Invoice, not a GST Tax Invoice.
+      const pdfTitle = docType === "tax_invoice" && doc.gst_type === "non_gst" ? "Invoice" : title;
       const items = await findItemsForDocument(id);
       const [companyRows] = await pool.query<any[]>("SELECT * FROM companies WHERE id = ?", [doc.company_id]);
       const [customerRows] = await pool.query<any[]>("SELECT * FROM customers WHERE id = ?", [doc.customer_id]);
@@ -959,7 +975,7 @@ export function createSalesDocumentRouter(
       const template = await getEffectiveDocumentTemplate(doc.company_id, docType as TemplateDocType, {
         accentColor: "#1B7A4D",
         headerLabel: docType === "tax_invoice" ? "Original for Recipient" : null,
-        footerNote: `This is a computer-generated ${title.toLowerCase()}.`,
+        footerNote: `This is a computer-generated ${pdfTitle.toLowerCase()}.`,
       });
       // The layout is whatever style this *document* was stamped with when
       // it was created (documents.template_style), NOT whatever Settings
@@ -1003,13 +1019,13 @@ export function createSalesDocumentRouter(
             })();
 
       if (template.templateStyle === "classic_measured") {
-        streamClassicMeasuredPdf(res, title, doc, linesForPdf, customer, company, template);
+        streamClassicMeasuredPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
       } else if (template.templateStyle === "classic_quotation") {
-        streamClassicQuotationPdf(res, title, doc, linesForPdf, customer, company, template);
+        streamClassicQuotationPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
       } else if (template.templateStyle === "classic_gst") {
-        streamClassicGstDocumentPdf(res, title, doc, linesForPdf, customer, company, template);
+        streamClassicGstDocumentPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
       } else {
-        streamDocumentPdf(res, title, doc, linesForPdf, customer, company, template);
+        streamDocumentPdf(res, pdfTitle, doc, linesForPdf, customer, company, template);
       }
     })
   );

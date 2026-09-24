@@ -11,6 +11,7 @@ import {
   getProfitAndLoss,
   getTrialBalance,
 } from "../services/accounting";
+import { GstType } from "../types";
 
 // General Ledger / Trial Balance - built entirely from the double-entry
 // ledger (journals + journal_lines + chart_of_accounts), never the old
@@ -29,6 +30,12 @@ function dateRange(query: any): { from: string; to: string } {
   return { from, to };
 }
 
+// Optional ?gst_type=gst|non_gst narrows a ledger-based report to one GST
+// book; omitted (or "all") reports every journal.
+function bookFilter(query: any): GstType | undefined {
+  return query.gst_type === "gst" || query.gst_type === "non_gst" ? query.gst_type : undefined;
+}
+
 accountingReportsRouter.get(
   "/general-ledger",
   asyncHandler(async (req, res) => {
@@ -45,7 +52,7 @@ accountingReportsRouter.get(
       // company_id - a mismatched pair is rejected here, not just
       // filtered out of the results (Phase 5, Step 10: company isolation
       // enforced server-side, never assumed from what the frontend sent).
-      const result = await getGeneralLedger({ companyId, accountId, from, to, sourceType, reference });
+      const result = await getGeneralLedger({ companyId, accountId, from, to, sourceType, reference, gstType: bookFilter(req.query) });
       res.json(result);
     } catch (err) {
       if (err instanceof AccountingError) {
@@ -68,7 +75,7 @@ accountingReportsRouter.get(
     // getTrialBalance is already scoped to companyId's own chart_of_accounts
     // rows by construction (its query's WHERE clause) - there's no
     // account_id parameter here for a mismatch to even be possible.
-    const result = await getTrialBalance(companyId, asOfDate);
+    const result = await getTrialBalance(companyId, asOfDate, bookFilter(req.query));
     res.json(result);
   })
 );
@@ -86,7 +93,7 @@ accountingReportsRouter.get(
     if (!companyId) return res.status(400).json({ message: "company_id is required" });
     const { from, to } = dateRange(req.query);
 
-    const result = await getProfitAndLoss(companyId, from, to);
+    const result = await getProfitAndLoss(companyId, from, to, bookFilter(req.query));
     res.json(result);
   })
 );
@@ -103,7 +110,7 @@ accountingReportsRouter.get(
     const asOfDate =
       typeof req.query.as_of === "string" && req.query.as_of ? req.query.as_of : new Date().toISOString().slice(0, 10);
 
-    const result = await getBalanceSheet(companyId, asOfDate);
+    const result = await getBalanceSheet(companyId, asOfDate, bookFilter(req.query));
     res.json(result);
   })
 );

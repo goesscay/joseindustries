@@ -21,7 +21,8 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "../components/QuickAddCustomerModal";
 import { RemoteSelect } from "../components/RemoteSelect";
-import { Account, Company, Customer, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation } from "../types";
+import { Account, Company, Customer, GstType, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation } from "../types";
+import { GST_TYPE_OPTIONS } from "../constants/gst";
 
 const PAGE_SIZE = 10;
 
@@ -93,11 +94,13 @@ export function ReceiptsPage() {
   const selectedCustomerId = Form.useWatch("customer_id", form);
   const selectedCompanyId = Form.useWatch("company_id", form);
   const amount = Form.useWatch("amount", form);
+  const selectedGstType = Form.useWatch("gst_type", form) as GstType | undefined;
+  const [listGstFilter, setListGstFilter] = useState<GstType | undefined>();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const companyParam = listCompanyFilter ? `&company_id=${listCompanyFilter}` : "";
+      const companyParam = (listCompanyFilter ? `&company_id=${listCompanyFilter}` : "") + (listGstFilter ? `&gst_type=${listGstFilter}` : "");
       const res = await api.get<{ data: Receipt[]; meta: { total: number } }>(
         `/receipts?page=${page}&perPage=${PAGE_SIZE}&search=${encodeURIComponent(search)}${companyParam}`
       );
@@ -108,7 +111,7 @@ export function ReceiptsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, listCompanyFilter]);
+  }, [page, search, listCompanyFilter, listGstFilter]);
 
   useEffect(() => {
     load();
@@ -134,7 +137,7 @@ export function ReceiptsPage() {
       try {
         const excludeParam = editing ? `&exclude_receipt_id=${editing.id}` : "";
         const res = await api.get<{ data: OutstandingInvoice[] }>(
-          `/receipts/outstanding-invoices?company_id=${companyId}&customer_id=${customerId}${excludeParam}`
+          `/receipts/outstanding-invoices?company_id=${companyId}&customer_id=${customerId}&gst_type=${form.getFieldValue("gst_type") || "gst"}${excludeParam}`
         );
         const rows: AllocationRow[] = res.data.map((inv) => ({
           tax_invoice_id: inv.id,
@@ -162,7 +165,7 @@ export function ReceiptsPage() {
       setAllocationRows([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCompanyId, selectedCustomerId]);
+  }, [selectedCompanyId, selectedCustomerId, selectedGstType]);
 
   function reapplyAmountToRows(newAmount: number) {
     setAllocationRows((prev) => autoFillOldestFirst(prev, newAmount));
@@ -200,6 +203,7 @@ export function ReceiptsPage() {
     form.resetFields();
     form.setFieldsValue({
       received_date: dayjs(),
+      gst_type: listGstFilter ?? "gst",
       company_id: companies[0]?.id,
       payment_mode: "cash",
     });
@@ -212,6 +216,7 @@ export function ReceiptsPage() {
     setEditing(record);
     form.setFieldsValue({
       company_id: record.company_id,
+      gst_type: record.gst_type || "gst",
       customer_id: record.customer_id,
       account_id: record.account_id,
       amount: Number(record.amount),
@@ -269,6 +274,13 @@ export function ReceiptsPage() {
   const columns: ColumnsType<Receipt> = [
     { title: "No.", dataIndex: "receipt_no", key: "receipt_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
+    {
+      title: "GST",
+      dataIndex: "gst_type",
+      key: "gst_type",
+      width: 100,
+      render: (v: GstType | undefined) => (v === "non_gst" ? <Tag color="orange">Without GST</Tag> : <Tag color="green">With GST</Tag>),
+    },
     { title: "Customer", dataIndex: "customer_name", key: "customer_name" },
     {
       title: "Against Invoice",
@@ -334,6 +346,17 @@ export function ReceiptsPage() {
             }}
             style={{ width: 180 }}
           />
+          <Select
+            placeholder="With / Without GST"
+            allowClear
+            value={listGstFilter}
+            options={GST_TYPE_OPTIONS}
+            onChange={(value) => {
+              setPage(1);
+              setListGstFilter(value);
+            }}
+            style={{ width: 170 }}
+          />
           <Input.Search
             placeholder="Search number or customer"
             allowClear
@@ -377,6 +400,17 @@ export function ReceiptsPage() {
               options={companies.map((c) => ({ value: c.id, label: c.name }))}
               onChange={() => form.setFieldsValue({ account_id: undefined })}
             />
+          </Form.Item>
+          <Form.Item
+            name="gst_type"
+            label="GST"
+            extra={
+              editing
+                ? "Fixed for this receipt."
+                : "Choose Without GST to receive payment against a Without GST invoice - only invoices of the same kind are listed below."
+            }
+          >
+            <Select options={GST_TYPE_OPTIONS} disabled={!!editing} />
           </Form.Item>
           <Form.Item label="Customer" required>
             <div style={{ display: "flex", gap: 8 }}>

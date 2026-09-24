@@ -5,7 +5,7 @@ import { requireModuleAccess, canAccessAccount } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
 import { AccountingError, getJournalBySource, postVendorPaymentJournalTx, reverseJournalTx } from "../services/accounting";
-import { Company, Expense, Journal, PaymentMode, Role, Vendor, VendorPayment } from "../types";
+import { parseGstType, Company, Expense, Journal, PaymentMode, Role, Vendor, VendorPayment } from "../types";
 
 export const vendorPaymentsRouter = Router();
 const MODULE = "expenses.vendor_payments";
@@ -145,7 +145,7 @@ vendorPaymentsRouter.post(
 
     const { vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes } = req.body;
 
-    const { docNumber, financialYear } = await getNextDocNumber("vendor_payment", company!.code, new Date(paid_date));
+    const { docNumber, financialYear } = await getNextDocNumber("vendor_payment", company!.code, new Date(paid_date), parseGstType(req.body.gst_type));
 
     const conn = await pool.getConnection();
     try {
@@ -153,8 +153,8 @@ vendorPaymentsRouter.post(
 
       const [insertResult] = await conn.query<any>(
         `INSERT INTO vendor_payments
-           (payment_no, financial_year, company_id, vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (payment_no, financial_year, company_id, vendor_id, expense_id, account_id, amount, payment_mode, reference_no, paid_date, notes, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -168,6 +168,7 @@ vendorPaymentsRouter.post(
           paid_date,
           notes || null,
           req.user!.sub,
+          parseGstType(req.body.gst_type),
         ]
       );
       const paymentId = insertResult.insertId;
@@ -232,7 +233,7 @@ vendorPaymentsRouter.put(
       await conn.query(
         `UPDATE vendor_payments SET
            company_id = ?, vendor_id = ?, expense_id = ?, account_id = ?, amount = ?, payment_mode = ?,
-           reference_no = ?, paid_date = ?, notes = ?
+           reference_no = ?, paid_date = ?, notes = ?, gst_type = ?
          WHERE id = ?`,
         [
           req.body.company_id,
@@ -244,6 +245,7 @@ vendorPaymentsRouter.put(
           reference_no || null,
           paid_date,
           notes || null,
+          parseGstType(req.body.gst_type),
           id,
         ]
       );
