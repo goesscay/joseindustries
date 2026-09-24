@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Modal, Form, Input, message } from "antd";
 import { api } from "../api/client";
 import { Customer } from "../types";
+import { GstinLookup } from "./GstinLookup";
 
 interface QuickAddCustomerModalProps {
   open: boolean;
@@ -51,9 +52,16 @@ export function QuickAddCustomerModal({ open, onClose, onCreated }: QuickAddCust
       destroyOnClose
       width={480}
     >
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 4 }}>Find by GSTIN</div>
+        <GstinLookup autoFocus onResult={(r) => { form.resetFields(); onCreated(r.customer); }} />
+        <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
+          An existing customer is selected; a new GSTIN is fetched from the GST portal and added for you. Or fill in the details below.
+        </div>
+      </div>
       <Form form={form} layout="vertical" size="middle">
         <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
-          <Input placeholder="Customer / company name" autoFocus />
+          <Input placeholder="Customer / company name" />
         </Form.Item>
         <Form.Item name="phone" label="Phone">
           <Input />

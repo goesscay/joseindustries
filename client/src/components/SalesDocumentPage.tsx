@@ -28,6 +28,7 @@ import { api, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "./QuickAddCustomerModal";
 import { RemoteSelect } from "./RemoteSelect";
+import { GstinLookup } from "./GstinLookup";
 import {
   Company,
   Customer,
@@ -168,6 +169,7 @@ export function SalesDocumentPage({
   const freightWatch = Form.useWatch("freight_charges", form) as number | undefined;
   const installationWatch = Form.useWatch("installation_charges", form) as number | undefined;
   const companyWatch = Form.useWatch("company_id", form) as number | undefined;
+  const customerWatch = Form.useWatch("customer_id", form) as number | undefined;
   const templateStyleWatch = Form.useWatch("template_style", form) as string | undefined;
   // Which PDF templates this document type can use, and the name shown for each.
   const [templateOptions, setTemplateOptions] = useState<string[]>([]);
@@ -218,6 +220,17 @@ export function SalesDocumentPage({
   // Document Templates selects for the company comes pre-selected on a new
   // document). Not for a conversion: that posts to a different document type's
   // endpoint, which picks its own template from the settings.
+  // Make sure the chosen customer's details can be shown under the picker even
+  // when it was picked from the search box (which only returns option labels).
+  useEffect(() => {
+    if (!modalOpen || !customerWatch || customers.some((c) => c.id === customerWatch)) return;
+    api
+      .get<{ customer: Customer }>(`/customers/${customerWatch}`)
+      .then((res) => setCustomers((prev) => (prev.some((c) => c.id === res.customer.id) ? prev : [res.customer, ...prev])))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen, customerWatch]);
+
   useEffect(() => {
     if (!modalOpen || !companyWatch || convertTarget) {
       setTemplateOptions([]);
@@ -665,6 +678,19 @@ export function SalesDocumentPage({
         destroyOnClose
       >
         <Form form={form} layout="vertical" size="middle">
+          {canCreateCustomer || can("contacts.customers", "view") ? (
+            <Form.Item
+              label="Find customer by GSTIN"
+              extra="An existing customer is selected straight from your database; a GSTIN we don't have yet is fetched from the GST portal, added to your customers and selected."
+            >
+              <GstinLookup
+                onResult={(r) => {
+                  setCustomers((prev) => [r.customer, ...prev.filter((c) => c.id !== r.customer.id)]);
+                  form.setFieldsValue({ customer_id: r.customer.id });
+                }}
+              />
+            </Form.Item>
+          ) : null}
           <Row gutter={12}>
             <Col xs={24} sm={8}>
               <Form.Item name="company_id" label="Company" rules={[{ required: true, message: "Company is required" }]}>
@@ -697,6 +723,21 @@ export function SalesDocumentPage({
                 <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
               </Form.Item>
             </Col>
+            {customerWatch && customers.find((c) => c.id === customerWatch) && (
+              <Col xs={24}>
+                {(() => {
+                  const c = customers.find((x) => x.id === customerWatch)!;
+                  return (
+                    <div style={{ background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 6, padding: "6px 10px", marginBottom: 12, fontSize: 12 }}>
+                      <strong>{c.name}</strong>
+                      {c.gstin ? ` · GSTIN ${c.gstin}` : ""}
+                      {c.state ? ` · ${c.state}` : ""}
+                      {c.billing_address ? <div style={{ color: "#666" }}>{c.billing_address}</div> : null}
+                    </div>
+                  );
+                })()}
+              </Col>
+            )}
             {templateOptions.length > 1 && (
               <Col xs={24} sm={8}>
                 <Form.Item

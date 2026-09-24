@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { GstinLookup } from "../components/GstinLookup";
 import { Table, Button, Input, Space, Modal, Form, message, Popconfirm, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
@@ -153,6 +154,21 @@ export function CustomersPage() {
         confirmLoading={saving}
         destroyOnClose
       >
+        {!editing && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 4 }}>Find by GSTIN</div>
+            <GstinLookup
+              onResult={(r) => {
+                setModalOpen(false);
+                load();
+                if (r.source === "database") message.info("This customer is already in your list");
+              }}
+            />
+            <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
+              Fetches the details from the GST portal and adds the customer (an existing GSTIN is not added twice). Or fill in the details below.
+            </div>
+          </div>
+        )}
         <Form form={form} layout="vertical" size="middle">
           <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
             <Input />
