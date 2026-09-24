@@ -260,17 +260,17 @@ export function streamClassicGstDocumentPdf(
       if (idx > 0) hLine(HEADER_RIGHT_X, HEADER_RIGHT_X + HEADER_RIGHT_W, ry);
       if (row.length === 4) {
         const [l1, v1, l2, v2] = row;
-        text(l1, HEADER_RIGHT_X + pad, ry + 2.5, { size: 7, color: MUTED, width: HEADER_RIGHT_COL_A_W - pad * 2 });
-        text(v1, HEADER_RIGHT_X + pad, ry + 11, { size: 8, width: HEADER_RIGHT_COL_A_W - pad * 2, align: valueAlign, maxH: h - 12 });
+        text(l1, HEADER_RIGHT_X + pad, ry + 2.5, { size: 8, color: MUTED, width: HEADER_RIGHT_COL_A_W - pad * 2 });
+        text(v1, HEADER_RIGHT_X + pad, ry + 12, { size: 9, width: HEADER_RIGHT_COL_A_W - pad * 2, align: valueAlign, maxH: h - 13 });
         vLine(HEADER_RIGHT_X + HEADER_RIGHT_COL_A_W, ry, ry + h);
         const bx = HEADER_RIGHT_X + HEADER_RIGHT_COL_A_W;
         const bw = HEADER_RIGHT_W - HEADER_RIGHT_COL_A_W;
-        text(l2, bx + pad, ry + 2.5, { size: 7, color: MUTED, width: bw - pad * 2 });
-        text(v2, bx + pad, ry + 11, { size: 8, width: bw - pad * 2, align: valueAlign, maxH: h - 12 });
+        text(l2, bx + pad, ry + 2.5, { size: 8, color: MUTED, width: bw - pad * 2 });
+        text(v2, bx + pad, ry + 12, { size: 9, width: bw - pad * 2, align: valueAlign, maxH: h - 13 });
       } else {
         const [l1, v1] = row;
-        text(l1, HEADER_RIGHT_X + pad, ry + 2.5, { size: 7, color: MUTED, width: HEADER_RIGHT_W - pad * 2 });
-        text(v1, HEADER_RIGHT_X + pad, ry + 11, { size: 8, width: HEADER_RIGHT_W - pad * 2, maxH: h - 12 });
+        text(l1, HEADER_RIGHT_X + pad, ry + 2.5, { size: 8, color: MUTED, width: HEADER_RIGHT_W - pad * 2 });
+        text(v1, HEADER_RIGHT_X + pad, ry + 12, { size: 9, width: HEADER_RIGHT_W - pad * 2, maxH: h - 13 });
       }
       ry += h;
     });
@@ -323,12 +323,12 @@ export function streamClassicGstDocumentPdf(
     drawColumnDividers(state.y, state.y + h);
     const midY = state.y + (h - 8) / 2;
     text("Sl No.", COLS.sno.x, midY, { width: COLS.sno.width, align: "center", bold: true, size: 7.5 });
-    text("Description of Goods", COLS.desc.x + 4, midY, { width: COLS.desc.width - 8, bold: true, size: 7.5 });
+    text("Description of Goods", COLS.desc.x + 4, midY, { width: COLS.desc.width - 8, align: "center", bold: true, size: 7.5 });
     text("HSN/SAC", COLS.hsn.x, midY, { width: COLS.hsn.width, align: "center", bold: true, size: 7.5 });
     text("GST Rate", COLS.gst.x, midY, { width: COLS.gst.width, align: "center", bold: true, size: 7.5 });
     text("Qty", COLS.qty.x, midY, { width: COLS.qty.width, align: "center", bold: true, size: 7.5 });
-    text("Rate", COLS.rate.x, midY, { width: COLS.rate.width - 4, align: "right", bold: true, size: 7.5 });
-    text("Amount", COLS.amount.x, midY, { width: COLS.amount.width - 4, align: "right", bold: true, size: 7.5 });
+    text("Rate", COLS.rate.x, midY, { width: COLS.rate.width, align: "center", bold: true, size: 7.5 });
+    text("Amount", COLS.amount.x, midY, { width: COLS.amount.width, align: "center", bold: true, size: 7.5 });
     state.y += h;
   }
 
@@ -406,7 +406,7 @@ export function streamClassicGstDocumentPdf(
     text(item.description, COLS.desc.x + 4, ty, { width: COLS.desc.width - 8 });
     text(item.hsn_code || "-", COLS.hsn.x, ty, { width: COLS.hsn.width, align: "center" });
     text(`${Number(item.tax_rate)}%`, COLS.gst.x, ty, { width: COLS.gst.width, align: "center" });
-    text(`${item.qty} ${item.unit}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
+    text(`${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
     text(formatMoney(item.rate), COLS.rate.x, ty, { width: COLS.rate.width - 4, align: "right" });
     // The sample's single "Amount" column is the line's pre-tax taxable
     // value (qty*rate less this line's own discount) - NOT item.line_total,
