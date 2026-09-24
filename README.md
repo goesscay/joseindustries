@@ -1,8 +1,22 @@
 # Jose Industries App
 
-Full-stack app: Express + TypeScript API, React (Vite + TypeScript) frontend, MySQL database.
+Full-stack ERP app: Express + TypeScript API, React (Vite + TypeScript) frontend, MySQL/MariaDB database.
 The backend serves both the `/api/*` routes and the built frontend from a single Node.js
 process — this matches Hostinger's Web Apps hosting, which runs one Node.js application.
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Runtime | Node.js 20, TypeScript 5 |
+| Backend | Express 4, `mysql2` (connection pool, raw SQL), `jsonwebtoken` + `bcryptjs` (JWT cookie auth), `cookie-parser`, `cors`, `dotenv` |
+| Database | MySQL / MariaDB - idempotent `src/db/schema.sql` applied by `npm run db:migrate` |
+| Frontend | React 18, Vite 5, Ant Design 5, React Router 6, Day.js, installable PWA (`vite-plugin-pwa`) |
+| PDFs | `pdfkit` (invoice, quotation, receipt and ledger layouts) + `pdf-lib` (merges the Original / Duplicate invoice copies into one PDF) |
+| Accounting | Double-entry ledger (journals, chart of accounts), GST returns, With/Without GST books |
+| Integrations | GSTIN lookup via gstinapi.in (`GSTIN_API_KEY`) |
+| Tooling | `tsx` (dev server), `concurrently`, `cross-env` |
+| Hosting | Hostinger Web Apps - one Node.js process serves `/api/*` and the built client |
 
 ## Structure
 
