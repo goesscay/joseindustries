@@ -222,6 +222,7 @@ function streamSheetPdf(
     const pad = 7;
     const innerW = leftW - pad * 2;
 
+    const hasConsignee = !!(document.consignee_name || document.consignee_address);
     let ly = top + 6;
     text("Buyer :", CONTENT_LEFT + pad, ly, innerW, { bold: true, size: 14 });
     ly += 21;
@@ -231,10 +232,34 @@ function streamSheetPdf(
       text(line, CONTENT_LEFT + pad, ly, innerW, { size: 9.5, color: MUTED });
       ly += measure(line, innerW, 9.5) + 3;
     }
-    const h = Math.max(INFO_MIN_H, ly - top + 26);
+    if (customer.gstin) {
+      text(`GSTIN : ${customer.gstin}`, CONTENT_LEFT + pad, ly, innerW, { size: 9.5 });
+      ly += measure(`GSTIN : ${customer.gstin}`, innerW, 9.5) + 3;
+    }
+    // A consignee (ship-to), when entered, gets its own block under the buyer.
+    let splitY = 0;
+    if (hasConsignee) {
+      ly += 4;
+      splitY = ly;
+      ly += 6;
+      text("Consignee (Ship to) :", CONTENT_LEFT + pad, ly, innerW, { bold: true, size: 11 });
+      ly += 17;
+      const cname = document.consignee_name || customer.name;
+      text(cname, CONTENT_LEFT + pad, ly, innerW, { bold: true, size: 10.5 });
+      ly += measure(cname, innerW, 10.5, true) + 4;
+      for (const line of [
+        document.consignee_address,
+        document.consignee_state ? `State : ${document.consignee_state}` : "",
+        document.consignee_gstin ? `GSTIN : ${document.consignee_gstin}` : "",
+      ].filter(Boolean) as string[]) {
+        text(line, CONTENT_LEFT + pad, ly, innerW, { size: 9.5, color: MUTED });
+        ly += measure(line, innerW, 9.5) + 3;
+      }
+    }
+    const h = Math.max(INFO_MIN_H, ly - top + 8);
     rect(CONTENT_LEFT, top, CONTENT_WIDTH, h);
     vLine(SPLIT_X, top, top + h);
-    text(`GSTIN : ${customer.gstin || ""}`, CONTENT_LEFT + pad, top + h - 20, innerW, { size: 9.5 });
+    if (hasConsignee) hLine(CONTENT_LEFT, SPLIT_X, splitY);
 
     // Right block: label | value, three equal rows.
     vLine(INFO_VALUE_X, top, top + h);

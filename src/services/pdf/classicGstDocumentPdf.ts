@@ -226,15 +226,40 @@ export function streamClassicGstDocumentPdf(
       document.place_of_supply ? `Place of Supply: ${document.place_of_supply}` : "",
     ].filter(Boolean);
 
-    let by = boxY + 5;
-    text("Buyer (Bill to)", CONTENT_LEFT + pad, by, { bold: true, size: 9, color: MUTED, width: innerW });
-    by += HEADER_TEXT_LINE_H;
-    text(customer.name, CONTENT_LEFT + pad, by, { bold: true, size: 12, width: innerW });
-    by += Math.max(HEADER_TEXT_LINE_H, doc.heightOfString(customer.name, { width: innerW }) + 4);
-    doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
-    for (const line of buyerAddrLines) {
-      doc.text(line, CONTENT_LEFT + pad, by, { width: innerW });
-      by += Math.max(HEADER_TEXT_LINE_H, doc.heightOfString(line, { width: innerW }) + 4);
+    // When a consignee (ship-to) was entered, the box is split in two - Buyer
+    // on top, Consignee below - each drawn a little smaller; otherwise the
+    // Buyer keeps the whole box.
+    const hasConsignee = !!(document.consignee_name || document.consignee_address);
+    const consigneeLines = [
+      document.consignee_address || "",
+      document.consignee_gstin ? `GSTIN/UIN: ${document.consignee_gstin}` : "",
+      document.consignee_state ? `State: ${document.consignee_state}` : "",
+    ].filter(Boolean);
+    function drawParty(label: string, name: string, lines: string[], top: number, bottom: number, compact: boolean) {
+      const lineH = compact ? 12 : HEADER_TEXT_LINE_H;
+      const nameSize = compact ? 10 : 12;
+      const bodySize = compact ? 8.5 : 9.5;
+      let y = top + (compact ? 3 : 5);
+      text(label, CONTENT_LEFT + pad, y, { bold: true, size: compact ? 8 : 9, color: MUTED, width: innerW });
+      y += lineH;
+      if (name) {
+        text(name, CONTENT_LEFT + pad, y, { bold: true, size: nameSize, width: innerW, maxH: bottom - y });
+        y += Math.max(lineH, doc.heightOfString(name, { width: innerW }) + 3);
+      }
+      doc.font("Helvetica").fontSize(bodySize).fillColor(MUTED);
+      for (const line of lines) {
+        if (y + bodySize > bottom) break;
+        doc.text(line, CONTENT_LEFT + pad, y, { width: innerW, height: bottom - y, ellipsis: true });
+        y += Math.max(lineH - 2, doc.heightOfString(line, { width: innerW }) + 3);
+      }
+    }
+    if (hasConsignee) {
+      const mid = boxY + HEADER_H / 2;
+      drawParty("Buyer (Bill to)", customer.name, buyerAddrLines, boxY, mid, true);
+      hLine(CONTENT_LEFT, CONTENT_LEFT + HEADER_LEFT_W, mid);
+      drawParty("Consignee (Ship to)", document.consignee_name || customer.name, consigneeLines, mid, boxY + HEADER_H, true);
+    } else {
+      drawParty("Buyer (Bill to)", customer.name, buyerAddrLines, boxY, boxY + HEADER_H, false);
     }
 
     // -- Right grid: 7 fixed-height rows, most split into two label/value

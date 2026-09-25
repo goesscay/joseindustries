@@ -290,20 +290,22 @@ export function streamDocumentPdf(
     ];
     const leftBottom = card("BILL TO", CONTENT_LEFT, customer.name, billLines);
 
-    const hasConsignee = !!document.consignee_name;
-    const shipName = hasConsignee ? document.consignee_name! : customer.name;
-    const shipAddress = hasConsignee ? document.consignee_address || "" : customer.shipping_address || customer.billing_address || "";
-    const shipGstin = hasConsignee ? document.consignee_gstin : customer.gstin;
-    const shipState = hasConsignee ? document.consignee_state : customer.state;
-    const shipLines = [
-      shipAddress,
-      [shipGstin ? `GSTIN: ${shipGstin}` : null, shipState ? `State: ${shipState}` : null].filter(Boolean).join("  |  "),
-    ];
-    const rightBottom = card("SHIP TO", rightX, shipName, shipLines);
+    // Ship-to only appears when a consignee was entered.
+    const hasConsignee = !!(document.consignee_name || document.consignee_address);
+    let rightBottom = leftBottom;
+    if (hasConsignee) {
+      const shipLines = [
+        document.consignee_address || "",
+        [document.consignee_gstin ? `GSTIN: ${document.consignee_gstin}` : null, document.consignee_state ? `State: ${document.consignee_state}` : null]
+          .filter(Boolean)
+          .join("  |  "),
+      ];
+      rightBottom = card("SHIP TO", rightX, document.consignee_name || customer.name, shipLines);
+    }
 
     const boxHeight = Math.max(leftBottom, rightBottom) - startY + 8;
     doc.rect(CONTENT_LEFT, startY, colWidth + pad * 2, boxHeight).strokeColor(BORDER).stroke();
-    doc.rect(rightX, startY, colWidth + pad * 2, boxHeight).strokeColor(BORDER).stroke();
+    if (hasConsignee) doc.rect(rightX, startY, colWidth + pad * 2, boxHeight).strokeColor(BORDER).stroke();
 
     state.y = startY + boxHeight + 14;
   }
