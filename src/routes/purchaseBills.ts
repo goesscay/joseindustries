@@ -240,7 +240,7 @@ purchaseBillsRouter.get(
        JOIN companies co ON co.id = b.company_id
        LEFT JOIN purchase_orders po ON po.id = b.purchase_order_id
        WHERE 1=1 ${whereClause}
-       ORDER BY b.financial_year DESC, b.id DESC
+       ORDER BY b.financial_year DESC, SUBSTRING_INDEX(b.bill_no, '/', -1) DESC, b.id DESC
        LIMIT ? OFFSET ?`,
       [...filterParams, perPage, offset]
     );
