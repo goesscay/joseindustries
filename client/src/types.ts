@@ -368,6 +368,7 @@ export interface VendorPayment {
 export type PurchaseBillStatus = "draft" | "received" | "cancelled";
 
 export interface PurchaseBill {
+  round_off?: string;
   gst_type?: GstType;
   id: number;
   bill_no: string;
@@ -417,6 +418,7 @@ export interface PurchaseBillItem {
 export type CreditNoteStatus = "draft" | "cancelled";
 
 export interface CreditNote {
+  round_off?: string;
   id: number;
   credit_note_no: string;
   financial_year: string;
@@ -467,6 +469,7 @@ export interface CreditNoteItem {
 export type DebitNoteStatus = "draft" | "cancelled";
 
 export interface DebitNote {
+  round_off?: string;
   id: number;
   debit_note_no: string;
   financial_year: string;
@@ -515,6 +518,7 @@ export interface DebitNoteItem {
 export type PurchaseOrderStatus = "draft" | "confirmed" | "cancelled";
 
 export interface PurchaseOrder {
+  round_off?: string;
   id: number;
   po_no: string;
   financial_year: string;

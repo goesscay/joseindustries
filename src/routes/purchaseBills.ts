@@ -366,7 +366,10 @@ purchaseBillsRouter.post(
       });
       subtotal = Math.round(subtotal * 100) / 100;
       taxAmount = Math.round(taxAmount * 100) / 100;
-      const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+      const rawTotal = Math.round((subtotal + taxAmount) * 100) / 100;
+      // Rounded to the nearest rupee; the difference is kept as round_off.
+      const totalAmount = Math.round(rawTotal);
+      const roundOff = Math.round((totalAmount - rawTotal) * 100) / 100;
 
       // Number off today's financial year, not bill_date's: a supplier bill
       // dated in an earlier year would otherwise land in that year's counter
@@ -376,8 +379,8 @@ purchaseBillsRouter.post(
       const [insertResult] = await conn.query<any>(
         `INSERT INTO purchase_bills
            (bill_no, financial_year, company_id, vendor_id, purchase_order_id, status, bill_date, due_date,
-            reference_no, notes, subtotal, tax_amount, total_amount, created_by, gst_type)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            reference_no, notes, subtotal, tax_amount, total_amount, round_off, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -391,6 +394,7 @@ purchaseBillsRouter.post(
           subtotal,
           taxAmount,
           totalAmount,
+          roundOff,
           req.user!.sub,
           gstType,
         ]
@@ -427,6 +431,7 @@ purchaseBillsRouter.post(
         billNo: docNumber,
         billDate: bill_date,
         lines: await classifyLinesForJournal(conn, computedLines),
+        roundOff,
         createdBy: req.user!.sub,
       });
 
@@ -473,7 +478,10 @@ purchaseBillsRouter.put(
     });
     subtotal = Math.round(subtotal * 100) / 100;
     taxAmount = Math.round(taxAmount * 100) / 100;
-    const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+    const rawTotal = Math.round((subtotal + taxAmount) * 100) / 100;
+    // Rounded to the nearest rupee; the difference is kept as round_off.
+    const totalAmount = Math.round(rawTotal);
+    const roundOff = Math.round((totalAmount - rawTotal) * 100) / 100;
 
     const conn = await pool.getConnection();
     try {
@@ -505,7 +513,7 @@ purchaseBillsRouter.put(
         `UPDATE purchase_bills SET
            bill_no = ?, financial_year = ?,
            company_id = ?, vendor_id = ?, purchase_order_id = ?, status = ?, bill_date = ?, due_date = ?,
-           reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?, gst_type = ?
+           reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?, round_off = ?, gst_type = ?
          WHERE id = ?`,
         [
           numbering.billNo,
@@ -521,6 +529,7 @@ purchaseBillsRouter.put(
           subtotal,
           taxAmount,
           totalAmount,
+          roundOff,
           parseGstType(req.body?.gst_type),
           id,
         ]
@@ -579,6 +588,7 @@ purchaseBillsRouter.put(
               billNo: numbering.billNo,
               billDate: bill_date,
               lines: await classifyLinesForJournal(conn, computedLines),
+              roundOff,
               createdBy: req.user!.sub,
             });
 

@@ -141,7 +141,10 @@ export function DebitNotesPage() {
     }
     subtotal = round2(subtotal);
     tax = round2(tax);
-    return { subtotal, tax, totalAmount: round2(subtotal + tax) };
+    // Rounded to the nearest rupee, the difference shown as Round Off.
+    const raw = round2(subtotal + tax);
+    const totalAmount = Math.round(raw);
+    return { subtotal, tax, roundOff: round2(totalAmount - raw), totalAmount };
   })();
 
   async function handleSubmit() {
@@ -337,6 +340,7 @@ export function DebitNotesPage() {
               <div style={{ textAlign: "right", borderTop: "1px solid #f0f0f0", paddingTop: 12, marginBottom: 16 }}>
                 <div>Subtotal: Rs. {totals.subtotal.toFixed(2)}</div>
                 <div>Tax: Rs. {totals.tax.toFixed(2)}</div>
+                {totals.roundOff !== 0 && <div>Round Off: Rs. {totals.roundOff.toFixed(2)}</div>}
                 <Typography.Text strong>Total: Rs. {totals.totalAmount.toFixed(2)}</Typography.Text>
               </div>
             </>

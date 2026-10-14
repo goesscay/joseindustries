@@ -1043,6 +1043,8 @@ export interface PostPurchaseBillJournalInput {
    * tracked lines is 100% Dr Inventory; a mixed bill splits accordingly -
    * never merged into one account. */
   lines: PurchaseBillJournalLine[];
+  /** Rounding of the total to the rupee (+0.40 when 44,863.60 is billed as 44,864). */
+  roundOff?: number;
   createdBy: number | null;
 }
 
@@ -1114,8 +1116,21 @@ export async function postPurchaseBillJournalTx(conn: PoolConnection, input: Pos
     lines.push({ account_id: inputGstAccountId, debit: totalTax, credit: 0, description });
   }
 
+  const roundOff = round2(input.roundOff ?? 0);
   const total = round2(inventorySubtotal + nonInventorySubtotal + totalTax);
-  lines.push({ account_id: apAccountId, debit: 0, credit: total, description });
+  lines.push({ account_id: apAccountId, debit: 0, credit: round2(total + roundOff), description });
+  if (roundOff !== 0) {
+    const roundOffAccountId = await getSystemAccountByCategory(input.companyId, "Round Off");
+    if (!roundOffAccountId) {
+      throw new AccountingError("Round Off system account not found for this company - run the database migration");
+    }
+    lines.push({
+      account_id: roundOffAccountId,
+      debit: roundOff > 0 ? roundOff : 0,
+      credit: roundOff < 0 ? -roundOff : 0,
+      description: `Round off - ${description}`,
+    });
+  }
 
   return createJournalTx(conn, {
     company_id: input.companyId,
@@ -1276,6 +1291,8 @@ export interface PostDebitNoteJournalInput {
    * (Inventory vs Purchases) is exactly what this must credit back, so the
    * reversal lands on the same account the original charge did. */
   lines: PurchaseBillJournalLine[];
+  /** Rounding of the total to the rupee (+0.40 when 44,863.60 is billed as 44,864). */
+  roundOff?: number;
   createdBy: number | null;
 }
 
@@ -1306,8 +1323,21 @@ export async function postDebitNoteJournalTx(conn: PoolConnection, input: PostDe
   }
 
   const description = `Debit Note ${input.debitNoteNo}`;
+  const roundOff = round2(input.roundOff ?? 0);
   const total = round2(inventorySubtotal + nonInventorySubtotal + totalTax);
-  const lines: JournalLineInput[] = [{ account_id: apAccountId, debit: total, credit: 0, description }];
+  const lines: JournalLineInput[] = [{ account_id: apAccountId, debit: round2(total + roundOff), credit: 0, description }];
+  if (roundOff !== 0) {
+    const roundOffAccountId = await getSystemAccountByCategory(input.companyId, "Round Off");
+    if (!roundOffAccountId) {
+      throw new AccountingError("Round Off system account not found for this company - run the database migration");
+    }
+    lines.push({
+      account_id: roundOffAccountId,
+      debit: roundOff < 0 ? -roundOff : 0,
+      credit: roundOff > 0 ? roundOff : 0,
+      description: `Round off - ${description}`,
+    });
+  }
 
   if (inventorySubtotal > 0) {
     const inventoryAccountId = await getSystemAccountByCategory(input.companyId, "Inventory");

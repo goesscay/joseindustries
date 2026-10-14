@@ -232,15 +232,18 @@ debitNotesRouter.post(
       });
       subtotal = round2(subtotal);
       taxAmount = round2(taxAmount);
-      const totalAmount = round2(subtotal + taxAmount);
+      const rawTotal = round2(subtotal + taxAmount);
+      // Rounded to the nearest rupee; the difference is kept as round_off.
+      const totalAmount = Math.round(rawTotal);
+      const roundOff = round2(totalAmount - rawTotal);
 
       const { docNumber, financialYear } = await getNextDocNumber("debit_note", company.code, new Date(issue_date), bill.gst_type === "non_gst" ? "non_gst" : "gst");
 
       const [result] = await conn.query<any>(
         `INSERT INTO debit_notes
            (debit_note_no, financial_year, company_id, vendor_id, purchase_bill_id, status, issue_date, reason, notes,
-            subtotal, tax_amount, total_amount, created_by, gst_type)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+            subtotal, tax_amount, total_amount, round_off, created_by, gst_type)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -253,6 +256,7 @@ debitNotesRouter.post(
           subtotal,
           taxAmount,
           totalAmount,
+          roundOff,
           req.user!.sub,
           // A debit note stays in the same GST book as the bill it corrects.
           bill.gst_type === "non_gst" ? "non_gst" : "gst",
@@ -291,6 +295,7 @@ debitNotesRouter.post(
         debitNoteNo: docNumber,
         issueDate: issue_date,
         lines: await classifyLinesForJournal(conn, computedLines),
+        roundOff,
         createdBy: req.user!.sub,
       });
 

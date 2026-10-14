@@ -1556,3 +1556,22 @@ ALTER TABLE expenses ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NO
 ALTER TABLE vendor_payments ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
 ALTER TABLE journals ADD COLUMN IF NOT EXISTS gst_type ENUM('gst', 'non_gst') NOT NULL DEFAULT 'gst';
 ALTER TABLE journals ADD INDEX IF NOT EXISTS idx_journals_gst_type (company_id, gst_type, journal_date);
+
+-- Round off on the purchase-side documents (and the stored figure on credit
+-- notes, whose grand total was already rounded to the rupee). The total is
+-- rounded to the nearest rupee and the difference kept here, like the sales
+-- documents' own round_off: e.g. 38,020.00 + 6,843.60 tax = 44,863.60 is
+-- recorded as total 44,864.00 with round_off +0.40. Bills and debit notes
+-- post that difference to the new "Round Off" account (5960) so purchases,
+-- inventory and Input GST stay exactly what the supplier charged.
+ALTER TABLE purchase_bills ADD COLUMN IF NOT EXISTS round_off DECIMAL(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS round_off DECIMAL(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE debit_notes ADD COLUMN IF NOT EXISTS round_off DECIMAL(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE credit_notes ADD COLUMN IF NOT EXISTS round_off DECIMAL(12, 2) NOT NULL DEFAULT 0;
+INSERT IGNORE INTO chart_of_accounts (company_id, account_code, name, account_type, category, normal_balance, is_system)
+SELECT id, '5960', 'Round Off', 'expense', 'Round Off', 'debit', TRUE FROM companies;
+UPDATE chart_of_accounts child
+JOIN chart_of_accounts parent
+  ON parent.company_id = child.company_id AND parent.account_code = '5000'
+SET child.parent_id = parent.id
+WHERE child.account_code = '5960';

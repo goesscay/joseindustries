@@ -118,8 +118,11 @@ function computeTotalsFromLines<T extends LineInput>(lines: T[]) {
   });
   subtotal = Math.round(subtotal * 100) / 100;
   taxAmount = Math.round(taxAmount * 100) / 100;
-  const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
-  return { computedLines, subtotal, taxAmount, totalAmount };
+  const rawTotal = Math.round((subtotal + taxAmount) * 100) / 100;
+  // Rounded to the nearest rupee; the difference is kept as round_off.
+  const totalAmount = Math.round(rawTotal);
+  const roundOff = Math.round((totalAmount - rawTotal) * 100) / 100;
+  return { computedLines, subtotal, taxAmount, totalAmount, roundOff };
 }
 
 purchaseOrdersRouter.get(
@@ -198,7 +201,7 @@ purchaseOrdersRouter.post(
     const { company, lines } = result;
 
     const { vendor_id, po_date, expected_date, reference_no, notes } = req.body ?? {};
-    const { computedLines, subtotal, taxAmount, totalAmount } = computeTotalsFromLines(lines);
+    const { computedLines, subtotal, taxAmount, totalAmount, roundOff } = computeTotalsFromLines(lines);
     const gstType = parseGstType(req.body?.gst_type);
 
     const { docNumber, financialYear } = await getNextDocNumber("purchase_order", company!.code, new Date(po_date), gstType);
@@ -210,8 +213,8 @@ purchaseOrdersRouter.post(
       const [insertResult] = await conn.query<any>(
         `INSERT INTO purchase_orders
            (po_no, financial_year, company_id, vendor_id, status, po_date, expected_date,
-            reference_no, notes, subtotal, tax_amount, total_amount, created_by, gst_type)
-         VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            reference_no, notes, subtotal, tax_amount, total_amount, round_off, created_by, gst_type)
+         VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           docNumber,
           financialYear,
@@ -224,6 +227,7 @@ purchaseOrdersRouter.post(
           subtotal,
           taxAmount,
           totalAmount,
+          roundOff,
           req.user!.sub,
           gstType,
         ]
@@ -277,7 +281,7 @@ purchaseOrdersRouter.put(
     const { lines } = result;
 
     const { vendor_id, po_date, expected_date, reference_no, notes, status } = req.body ?? {};
-    const { computedLines, subtotal, taxAmount, totalAmount } = computeTotalsFromLines(lines);
+    const { computedLines, subtotal, taxAmount, totalAmount, roundOff } = computeTotalsFromLines(lines);
 
     const conn = await pool.getConnection();
     try {
@@ -306,7 +310,7 @@ purchaseOrdersRouter.put(
       await conn.query(
         `UPDATE purchase_orders SET
            company_id = ?, vendor_id = ?, status = ?, po_date = ?, expected_date = ?,
-           reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?, gst_type = ?
+           reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?, round_off = ?, gst_type = ?
          WHERE id = ?`,
         [
           req.body.company_id,
@@ -319,6 +323,7 @@ purchaseOrdersRouter.put(
           subtotal,
           taxAmount,
           totalAmount,
+          roundOff,
           parseGstType(req.body?.gst_type),
           id,
         ]
