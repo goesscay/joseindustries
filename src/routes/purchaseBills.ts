@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/auth";
 import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getNextDocNumber } from "../services/numbering";
+import { getFinancialYear } from "../services/financialYear";
 import { computeLine, LineInput } from "../utils/totals";
 import { AccountingError, getJournalBySource, postPurchaseBillJournalTx, reverseJournalTx } from "../services/accounting";
 import {
@@ -13,6 +14,7 @@ import {
   postDocumentStockMovementTx,
   reverseStockForSourceTx,
 } from "../services/inventory";
+import { PoolConnection } from "mysql2/promise";
 import { GstType, parseGstType, Company, Journal, PurchaseBill, PurchaseBillItem, Vendor } from "../types";
 
 // Purchase Bills - the first real purchase-side document (Phase 7A).
@@ -101,6 +103,45 @@ async function classifyLinesForJournal(
     taxableValue: computed.taxableValue,
     taxAmount: computed.taxAmount,
   }));
+}
+
+/**
+ * A bill's number is "PB/{company code}/{financial year}/{[NG-]sequence}" - it
+ * only means something if it matches the bill's own company and bill date. The
+ * number is issued when the bill is created, but the company and the date can
+ * both be edited afterwards (the form starts on the first company, and a bill
+ * is often keyed in before its date is corrected), which used to leave e.g. a
+ * Jose Industries bill numbered PB/JE/..., or a September-2026 bill numbered
+ * from 25-26. When an edit moves the bill to a different series, it is issued
+ * the next number of the right one, and the old number is handed back if it
+ * was the most recent of its series (so a bill that was simply created under
+ * the wrong company does not leave a hole behind).
+ */
+async function reissueBillNumberIfSeriesChanged(
+  conn: PoolConnection,
+  existing: PurchaseBill,
+  companyId: number,
+  billDate: string,
+  gstType: GstType
+): Promise<{ billNo: string; financialYear: string; changed: boolean }> {
+  const [companyRows] = await conn.query<any[]>("SELECT code FROM companies WHERE id = ?", [companyId]);
+  const code: string | undefined = companyRows[0]?.code;
+  if (!code) throw new AccountingError("Company not found");
+  const financialYear = getFinancialYear(new Date(`${billDate}T00:00:00`));
+
+  const match = existing.bill_no.match(/^PB\/([^/]+)\/([^/]+)\/(NG-)?(\d+)$/);
+  if (match && match[1] === code && match[2] === financialYear && Boolean(match[3]) === (gstType === "non_gst")) {
+    return { billNo: existing.bill_no, financialYear, changed: false };
+  }
+
+  const issued = await getNextDocNumber("purchase_bill", code, new Date(`${billDate}T00:00:00`), gstType);
+  if (match) {
+    await conn.query(
+      "UPDATE doc_counters SET last_number = last_number - 1 WHERE doc_type = ? AND company_code = ? AND financial_year = ? AND last_number = ?",
+      [match[3] ? "purchase_bill_ng" : "purchase_bill", match[1], match[2], Number(match[4])]
+    );
+  }
+  return { billNo: issued.docNumber, financialYear: issued.financialYear, changed: true };
 }
 
 async function validatePayload(body: any) {
@@ -452,12 +493,23 @@ purchaseBillsRouter.put(
       const resolvedStatus =
         status && ["draft", "received", "cancelled"].includes(status) ? status : existing.status;
 
+      const numbering = await reissueBillNumberIfSeriesChanged(
+        conn,
+        existing,
+        Number(req.body.company_id),
+        bill_date,
+        parseGstType(req.body?.gst_type)
+      );
+
       await conn.query(
         `UPDATE purchase_bills SET
+           bill_no = ?, financial_year = ?,
            company_id = ?, vendor_id = ?, purchase_order_id = ?, status = ?, bill_date = ?, due_date = ?,
            reference_no = ?, notes = ?, subtotal = ?, tax_amount = ?, total_amount = ?, gst_type = ?
          WHERE id = ?`,
         [
+          numbering.billNo,
+          numbering.financialYear,
           req.body.company_id,
           vendor_id,
           purchase_order_id || null,
@@ -524,7 +576,7 @@ purchaseBillsRouter.put(
           : await postPurchaseBillJournalTx(conn, {
               companyId: Number(req.body.company_id),
               billId: id,
-              billNo: existing.bill_no,
+              billNo: numbering.billNo,
               billDate: bill_date,
               lines: await classifyLinesForJournal(conn, computedLines),
               createdBy: req.user!.sub,
