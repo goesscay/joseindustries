@@ -136,26 +136,29 @@ export async function getPartyLedgerReport(
   const [partyRows] = await pool.query<any[]>("SELECT * FROM vendors WHERE id = ?", [partyId]);
   if (!partyRows[0]) throw new PartyLedgerError(404, "Vendor not found");
 
-  const [openingDebit] = await pool.query<any[]>(
+  const [openingExpenses] = await pool.query<any[]>(
     `SELECT COALESCE(SUM(total_amount), 0) as total FROM expenses WHERE vendor_id = ? AND expense_date < ?${g}`,
     [partyId, from, ...gp]
   );
-  const [openingCredit] = await pool.query<any[]>(
+  const [openingPayments] = await pool.query<any[]>(
     `SELECT COALESCE(SUM(amount), 0) as total FROM vendor_payments WHERE vendor_id = ? AND paid_date < ?${g}`,
     [partyId, from, ...gp]
   );
-  // Note: Debit Notes are deliberately NOT included here. A Debit Note is
-  // always tied to a purchase_bill_id, but purchase_bills are themselves
-  // never part of this vendor ledger at all (only expenses/vendor_payments
-  // are, a pre-existing gap that predates Phase D - confirmed nothing here
-  // or in reports.ts's Outstanding Payable ever reads purchase_bills).
-  // Adding a Debit Note's credit without the matching Purchase Bill's own
-  // debit would make this ledger MORE wrong, not less - it would show a
-  // credit with nothing behind it. Fixing that properly means adding
-  // Purchase Bills to this ledger in their own right, which is a separate,
-  // bigger, pre-existing gap - flagged as its own follow-up rather than
-  // patched over here.
-  const openingBalance = Number(openingDebit[0].total) - Number(openingCredit[0].total);
+  // Purchase Bills are what vendors are actually billed through now, and a
+  // Debit Note (a return / price correction on a bill) takes some of it back,
+  // so both belong in the statement next to expenses and payments: a bill
+  // raises what we owe, a debit note reduces it, exactly like a payment.
+  // Cancelled ones carry no ledger effect (their journal is reversed).
+  const [openingBills] = await pool.query<any[]>(
+    `SELECT COALESCE(SUM(total_amount), 0) as total FROM purchase_bills WHERE vendor_id = ? AND status != 'cancelled' AND bill_date < ?${g}`,
+    [partyId, from, ...gp]
+  );
+  const [openingDebitNotes] = await pool.query<any[]>(
+    `SELECT COALESCE(SUM(total_amount), 0) as total FROM debit_notes WHERE vendor_id = ? AND status != 'cancelled' AND issue_date < ?${g}`,
+    [partyId, from, ...gp]
+  );
+  const openingBalance =
+    Number(openingExpenses[0].total) + Number(openingBills[0].total) - Number(openingPayments[0].total) - Number(openingDebitNotes[0].total);
 
   const [expenses] = await pool.query<any[]>(
     `SELECT id, expense_no as doc_number, expense_date as entry_date, total_amount as amount, created_at
@@ -165,6 +168,16 @@ export async function getPartyLedgerReport(
   const [payments] = await pool.query<any[]>(
     `SELECT id, payment_no as doc_number, paid_date as entry_date, amount, created_at
      FROM vendor_payments WHERE vendor_id = ? AND paid_date BETWEEN ? AND ?${g}`,
+    [partyId, from, to, ...gp]
+  );
+  const [bills] = await pool.query<any[]>(
+    `SELECT id, bill_no as doc_number, bill_date as entry_date, total_amount as amount, created_at
+     FROM purchase_bills WHERE vendor_id = ? AND status != 'cancelled' AND bill_date BETWEEN ? AND ?${g}`,
+    [partyId, from, to, ...gp]
+  );
+  const [debitNotes] = await pool.query<any[]>(
+    `SELECT id, debit_note_no as doc_number, issue_date as entry_date, total_amount as amount, created_at
+     FROM debit_notes WHERE vendor_id = ? AND status != 'cancelled' AND issue_date BETWEEN ? AND ?${g}`,
     [partyId, from, to, ...gp]
   );
 
@@ -184,6 +197,22 @@ export async function getPartyLedgerReport(
       description: "Vendor Payment",
       debit: 0,
       credit: Number(p.amount),
+    })),
+    ...bills.map((b) => ({
+      entry_date: b.entry_date,
+      created_at: b.created_at,
+      doc_number: b.doc_number,
+      description: "Purchase Bill",
+      debit: Number(b.amount),
+      credit: 0,
+    })),
+    ...debitNotes.map((d) => ({
+      entry_date: d.entry_date,
+      created_at: d.created_at,
+      doc_number: d.doc_number,
+      description: "Debit Note",
+      debit: 0,
+      credit: Number(d.amount),
     })),
   ];
   combined.sort((a, b) => {
