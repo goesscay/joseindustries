@@ -172,10 +172,14 @@ export function streamClassicGstDocumentPdf(
       .text(str, x, y, { width: opts.width, align: opts.align, lineBreak: opts.width !== undefined, height: opts.maxH, ellipsis: opts.maxH !== undefined });
   }
 
+  // Every page after the first repeats the letterhead + buyer / reference
+  // block (Section A), so a continued invoice is still identifiable page by page.
+  let headerReady = false;
   function newPage() {
     doc.addPage();
     state.page += 1;
     state.y = PAGE_MARGIN;
+    if (headerReady) drawHeaderSection();
   }
 
   /** Returns true if a new page was started, so callers that need to
@@ -358,6 +362,7 @@ export function streamClassicGstDocumentPdf(
   }
 
   drawHeaderSection();
+  headerReady = true;
   drawTableHeader();
 
   // Bottom summary lines: discount/freight/installation (only if nonzero,
@@ -410,56 +415,59 @@ export function streamClassicGstDocumentPdf(
     );
     return ITEM_TOTAL_ROW_H + wordsH + hsnH + declH + (template.showSignatureBlock ? SIGNATURE_H : 0);
   })();
-  const fillH = BOTTOM_LIMIT - state.y - belowBodyH;
-  const bodyH = Math.max(ITEM_BODY_MIN_H, itemsNaturalH + summaryBlockH + 20, fillH);
+  const wordsBlockH = Math.max(
+    WORDS_H,
+    doc.font("Helvetica-Bold").fontSize(8.5).heightOfString(`Amount Chargeable (in words): ${amountInWords(grandTotal)}`, { width: CONTENT_WIDTH - 90 }) + 12
+  );
 
-  if (ensureSpace(bodyH + ITEM_TOTAL_ROW_H)) {
-    drawTableHeader();
+  function drawItemsBox(top: number, h: number) {
+    rect(CONTENT_LEFT, top, TABLE_RIGHT - CONTENT_LEFT, h);
+    drawColumnDividers(top, top + h);
   }
-  const bodyTop = state.y;
-  rect(CONTENT_LEFT, bodyTop, TABLE_RIGHT - CONTENT_LEFT, bodyH);
-  drawColumnDividers(bodyTop, bodyTop + bodyH);
 
   // Item rows drawn top-down from the body's top edge - the sample's own
   // item row starts almost immediately below the header, leaving the
   // blank space below it, not above it.
-  let iy = bodyTop;
-  items.forEach((item, idx) => {
-    const rowHeight = itemRowHeights[idx];
-    const ty = iy + 4;
-    text(String(idx + 1), COLS.sno.x, ty, { width: COLS.sno.width, align: "center" });
-    text(item.description, COLS.desc.x + 4, ty, { width: COLS.desc.width - 8 });
-    text(item.hsn_code || "-", COLS.hsn.x, ty, { width: COLS.hsn.width, align: "center" });
-    text(`${Number(item.tax_rate)}%`, COLS.gst.x, ty, { width: COLS.gst.width, align: "center" });
-    text(`${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
-    text(formatMoney(item.rate), COLS.rate.x, ty, { width: COLS.rate.width - 4, align: "right" });
-    // The sample's single "Amount" column is the line's pre-tax taxable
-    // value (qty*rate less this line's own discount) - NOT item.line_total,
-    // which this app's data model defines as tax-inclusive. GST is added
-    // back as its own CGST/SGST/IGST line(s) further down this same table,
-    // exactly like the sample - showing a tax-inclusive figure here would
-    // double-count it.
-    const baseAmount = item.qty * item.rate;
-    const lineTaxableValue = baseAmount - (baseAmount * (item.discount_percent || 0)) / 100;
-    text(formatMoney(lineTaxableValue), COLS.amount.x, ty, { width: COLS.amount.width - 4, align: "right" });
-    iy += rowHeight;
-  });
-
-  // Summary lines, bottom-anchored inside the same body box.
-  const summaryLabelRight = COLS.rate.x + COLS.rate.width; // matches the sample's "Total" label ending before the Rate/per column
-  let sy = bodyTop + bodyH - SUMMARY_BOTTOM_GAP - (summaryLines.length - 1) * SUMMARY_LINE_H;
-  for (const line of summaryLines) {
-    if (line.label) {
-      text(line.label, COLS.hsn.x, sy, { width: summaryLabelRight - COLS.hsn.x - 6, align: "right", bold: !!line.bold });
+  function drawItemRows(from: number, to: number, top: number) {
+    let iy = top;
+    for (let idx = from; idx < to; idx++) {
+      const item = items[idx];
+      const rowHeight = itemRowHeights[idx];
+      const ty = iy + 4;
+      text(String(idx + 1), COLS.sno.x, ty, { width: COLS.sno.width, align: "center" });
+      text(item.description, COLS.desc.x + 4, ty, { width: COLS.desc.width - 8 });
+      text(item.hsn_code || "-", COLS.hsn.x, ty, { width: COLS.hsn.width, align: "center" });
+      text(`${Number(item.tax_rate)}%`, COLS.gst.x, ty, { width: COLS.gst.width, align: "center" });
+      text(`${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
+      text(formatMoney(item.rate), COLS.rate.x, ty, { width: COLS.rate.width - 4, align: "right" });
+      // The sample's single "Amount" column is the line's pre-tax taxable
+      // value (qty*rate less this line's own discount) - NOT item.line_total,
+      // which this app's data model defines as tax-inclusive. GST is added
+      // back as its own CGST/SGST/IGST line(s) further down this same table,
+      // exactly like the sample - showing a tax-inclusive figure here would
+      // double-count it.
+      const baseAmount = item.qty * item.rate;
+      const lineTaxableValue = baseAmount - (baseAmount * (item.discount_percent || 0)) / 100;
+      text(formatMoney(lineTaxableValue), COLS.amount.x, ty, { width: COLS.amount.width - 4, align: "right" });
+      iy += rowHeight;
     }
-    text(formatMoney(line.value), COLS.amount.x, sy, { width: COLS.amount.width - 4, align: "right", bold: !!line.bold });
-    sy += SUMMARY_LINE_H;
   }
 
-  state.y = bodyTop + bodyH;
+  // Summary lines, bottom-anchored inside the last body box.
+  function drawSummaryLines(bodyTop: number, bodyH: number) {
+    const summaryLabelRight = COLS.rate.x + COLS.rate.width; // matches the sample's "Total" label ending before the Rate/per column
+    let sy = bodyTop + bodyH - SUMMARY_BOTTOM_GAP - (summaryLines.length - 1) * SUMMARY_LINE_H;
+    for (const line of summaryLines) {
+      if (line.label) {
+        text(line.label, COLS.hsn.x, sy, { width: summaryLabelRight - COLS.hsn.x - 6, align: "right", bold: !!line.bold });
+      }
+      text(formatMoney(line.value), COLS.amount.x, sy, { width: COLS.amount.width - 4, align: "right", bold: !!line.bold });
+      sy += SUMMARY_LINE_H;
+    }
+  }
 
   // Separate Total row (grand total), below the body, its own bordered row.
-  {
+  function drawTotalRow() {
     const h = ITEM_TOTAL_ROW_H;
     rect(CONTENT_LEFT, state.y, TABLE_RIGHT - CONTENT_LEFT, h);
     vLine(COLS.rate.x, state.y, state.y + h);
@@ -467,6 +475,60 @@ export function streamClassicGstDocumentPdf(
     text("Total", CONTENT_LEFT, state.y + 4, { width: COLS.rate.x - CONTENT_LEFT - 6, align: "right", bold: true });
     text(formatMoney(grandTotal), COLS.amount.x, state.y + 4, { width: COLS.amount.width - 4, align: "right", bold: true });
     state.y += h;
+  }
+
+  // The items are laid out page by page. On the last page the box stretches so
+  // everything below it (total, amount in words, HSN table, declaration,
+  // signature) ends at the page bottom - exactly how a short invoice has
+  // always looked. A long invoice fills each page with rows, then continues on
+  // a new page that repeats the header and the column headings.
+  let from = 0;
+  let avail = BOTTOM_LIMIT - state.y;
+  for (;;) {
+    const rowsH = itemRowHeights.slice(from).reduce((a, b) => a + b, 0);
+    const needed = Math.max(ITEM_BODY_MIN_H, rowsH + summaryBlockH + 20);
+    if (needed + belowBodyH <= avail + 0.5) {
+      const bodyH = avail - belowBodyH;
+      const bodyTop = state.y;
+      drawItemsBox(bodyTop, bodyH);
+      drawItemRows(from, items.length, bodyTop);
+      drawSummaryLines(bodyTop, bodyH);
+      state.y = bodyTop + bodyH;
+      drawTotalRow();
+      break;
+    }
+    // Rows, total and the amount in words fit here; the HSN table and the
+    // sections after it flow on to the next page (each checks its own space).
+    // Failing that, at least keep the total row with the rows.
+    const tail = needed + ITEM_TOTAL_ROW_H + wordsBlockH <= avail + 0.5 ? ITEM_TOTAL_ROW_H + wordsBlockH : ITEM_TOTAL_ROW_H;
+    if (needed + tail <= avail + 0.5) {
+      const bodyH = avail - tail;
+      const bodyTop = state.y;
+      drawItemsBox(bodyTop, bodyH);
+      drawItemRows(from, items.length, bodyTop);
+      drawSummaryLines(bodyTop, bodyH);
+      state.y = bodyTop + bodyH;
+      drawTotalRow();
+      break;
+    }
+    // Too many rows for this page: fill it, then continue on the next.
+    let take = 0;
+    let sum = 0;
+    while (from + take < items.length && sum + itemRowHeights[from + take] <= avail) {
+      sum += itemRowHeights[from + take];
+      take++;
+    }
+    if (take === 0 && from < items.length) take = 1; // a single over-tall row still has to go somewhere
+    // All the remaining rows fit here but their totals and the sections after
+    // them do not: carry the last couple of rows over so the next page opens
+    // with rows rather than an empty table.
+    if (from + take >= items.length && take > 1) take -= take > 2 ? 2 : 1;
+    drawItemsBox(state.y, avail);
+    drawItemRows(from, from + take, state.y);
+    from += take;
+    newPage();
+    drawTableHeader();
+    avail = BOTTOM_LIMIT - state.y;
   }
 
   // ============================================================

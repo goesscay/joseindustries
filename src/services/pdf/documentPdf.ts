@@ -186,16 +186,15 @@ export function streamDocumentPdf(
   }
 
   function drawContinuationHeader() {
-    drawBrandmark(CONTENT_LEFT, state.y, 20);
-    doc.fontSize(8.5).fillColor(GRAY);
-    doc.text(
-      `${title} No: ${document.doc_number}   |   Date: ${formatDate(document.issue_date)}   (Continued)`,
-      CONTENT_LEFT,
-      state.y + 24
-    );
-    state.y = Math.max(doc.y, state.y + 20) + 8;
-    doc.moveTo(CONTENT_LEFT, state.y).lineTo(CONTENT_RIGHT, state.y).strokeColor(BORDER).stroke();
-    state.y += 10;
+    // The same brandmark / company block / title as page one, then a line that
+    // says which document this page belongs to.
+    drawMainHeader();
+    state.y -= 6;
+    doc.font("Helvetica").fontSize(8.5).fillColor(GRAY);
+    doc.text(`${title} No: ${document.doc_number}   |   Date: ${formatDate(document.issue_date)}   (Continued)`, CONTENT_LEFT, state.y, {
+      width: CONTENT_WIDTH,
+    });
+    state.y = doc.y + 10;
   }
 
   function metaRow(label: string, value: string, x: number, y: number, width: number): number {

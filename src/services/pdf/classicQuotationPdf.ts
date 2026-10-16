@@ -213,6 +213,13 @@ function streamSheetPdf(
     state.y = PAGE_MARGIN;
   }
 
+  /** A continuation page repeats the letterhead and the buyer / number block. */
+  function newPageWithHeader() {
+    newPage();
+    state.y = drawLetterhead(doc, { company, template, title, left: CONTENT_LEFT, width: CONTENT_WIDTH, top: state.y, minHeight: 112 });
+    drawInfo();
+  }
+
   // ============================================================
   // Buyer block (left) + Date / Number / Reference (right)
   // ============================================================
@@ -511,7 +518,7 @@ function streamSheetPdf(
     if (remaining <= avail) {
       drawBodyBox(state.y, avail);
       drawItemRows(idx, items.length, state.y);
-      newPage();
+      newPageWithHeader();
       drawFooter(state.y);
       break;
     }
@@ -526,7 +533,7 @@ function streamSheetPdf(
     drawBodyBox(state.y, avail);
     drawItemRows(idx, idx + take, state.y);
     idx += take;
-    newPage();
+    newPageWithHeader();
     drawItemsHeader();
     avail = BOTTOM_LIMIT - state.y;
   }
