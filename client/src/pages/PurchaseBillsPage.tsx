@@ -318,7 +318,8 @@ export function PurchaseBillsPage() {
   }
 
   const columns: ColumnsType<PurchaseBill> = [
-    { title: "No.", dataIndex: "bill_no", key: "bill_no" },
+    { title: "Bill Reference No.", dataIndex: "reference_no", key: "reference_no", render: (v: string | null) => v || "-" },
+    { title: "Bill No.", dataIndex: "bill_no", key: "bill_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
     {
       title: "GST",
