@@ -318,7 +318,7 @@ export function PurchaseBillsPage() {
   }
 
   const columns: ColumnsType<PurchaseBill> = [
-    { title: "Bill Reference No.", dataIndex: "reference_no", key: "reference_no", render: (v: string | null) => v || "-" },
+    { title: "Reference", dataIndex: "reference_no", key: "reference_no", render: (v: string | null) => v || "-" },
     { title: "Bill No.", dataIndex: "bill_no", key: "bill_no" },
     { title: "Company", dataIndex: "company_code", key: "company_code", width: 90 },
     {
@@ -329,19 +329,7 @@ export function PurchaseBillsPage() {
       render: (v: GstType | undefined) => (v === "non_gst" ? <Tag color="orange">Without GST</Tag> : <Tag color="green">With GST</Tag>),
     },
     { title: "Vendor", dataIndex: "vendor_name", key: "vendor_name" },
-    {
-      title: "Purchase Order",
-      dataIndex: "source_po_no",
-      key: "source_po_no",
-      render: (v: string | null) => (v ? <Tag color="blue">{v}</Tag> : "-"),
-    },
     { title: "Bill Date", dataIndex: "bill_date", key: "bill_date", render: (d: string) => dayjs(d).format("DD MMM YYYY") },
-    {
-      title: "Due Date",
-      dataIndex: "due_date",
-      key: "due_date",
-      render: (d: string | null) => (d ? dayjs(d).format("DD MMM YYYY") : "-"),
-    },
     { title: "Subtotal", dataIndex: "subtotal", key: "subtotal", render: (v: string) => `Rs. ${Number(v).toFixed(2)}` },
     { title: "Tax", dataIndex: "tax_amount", key: "tax_amount", render: (v: string) => `Rs. ${Number(v).toFixed(2)}` },
     { title: "Total", dataIndex: "total_amount", key: "total_amount", render: (v: string) => `Rs. ${Number(v).toFixed(2)}` },
