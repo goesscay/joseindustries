@@ -15,12 +15,13 @@ import {
   Tag,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, FilePdfOutlined, ShareAltOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "../components/QuickAddCustomerModal";
 import { RemoteSelect } from "../components/RemoteSelect";
+import { PdfTarget, usePdfActions } from "../components/PdfViewer";
 import { Account, Company, Customer, GstType, OutstandingInvoice, PaymentMode, Receipt, ReceiptAllocation } from "../types";
 import { GST_TYPE_OPTIONS } from "../constants/gst";
 
@@ -267,9 +268,12 @@ export function ReceiptsPage() {
     }
   }
 
-  function downloadPdf(record: Receipt) {
-    window.open(`/api/receipts/${record.id}/pdf`, "_blank");
-  }
+  const pdf = usePdfActions();
+  const pdfTarget = (record: Receipt): PdfTarget => ({
+    url: `/api/receipts/${record.id}/pdf`,
+    filename: record.receipt_no,
+    title: `Receipt ${record.receipt_no}`,
+  });
 
   const columns: ColumnsType<Receipt> = [
     { title: "No.", dataIndex: "receipt_no", key: "receipt_no" },
@@ -309,7 +313,7 @@ export function ReceiptsPage() {
     {
       title: "Actions",
       key: "actions",
-      width: 130,
+      width: 190,
       render: (_, record) => (
         <Space size="small">
           {canEdit ? (
@@ -317,7 +321,9 @@ export function ReceiptsPage() {
           ) : (
             <Button size="small" icon={<EditOutlined />} disabled title="View only" />
           )}
-          <Button size="small" icon={<FilePdfOutlined />} onClick={() => downloadPdf(record)} />
+          <Button size="small" icon={<FilePdfOutlined />} title="View PDF" onClick={() => pdf.view(pdfTarget(record))} />
+          <Button size="small" icon={<DownloadOutlined />} title="Download PDF" onClick={() => pdf.download(pdfTarget(record))} />
+          <Button size="small" icon={<ShareAltOutlined />} title="Share PDF" onClick={() => pdf.share(pdfTarget(record))} />
           {canDelete && (
             <Popconfirm title="Delete this receipt?" onConfirm={() => handleDelete(record)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -373,6 +379,8 @@ export function ReceiptsPage() {
           )}
         </Space>
       </Space>
+
+      {pdf.viewer}
 
       <Table
         rowKey="id"
