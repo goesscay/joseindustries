@@ -23,13 +23,14 @@ import {
   Popover,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { CalendarOutlined, PlusOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, PrinterOutlined, SwapOutlined } from "@ant-design/icons";
+import { CalendarOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, FilePdfOutlined, PrinterOutlined, ShareAltOutlined, SwapOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { QuickAddCustomerModal } from "./QuickAddCustomerModal";
 import { RemoteSelect } from "./RemoteSelect";
 import { GstinLookup } from "./GstinLookup";
+import { PdfTarget, usePdfActions } from "./PdfViewer";
 import {
   Company,
   Customer,
@@ -547,12 +548,15 @@ export function SalesDocumentPage({
     }
   }
 
-  function downloadPdf(record: SalesDocument) {
-    window.open(`/api${apiPath}/${record.id}/pdf`, "_blank");
-  }
+  const pdf = usePdfActions();
+  const pdfTarget = (record: SalesDocument, query = ""): PdfTarget => ({
+    url: `/api${apiPath}/${record.id}/pdf${query}`,
+    filename: record.doc_number,
+    title: `${title} ${record.doc_number}`,
+  });
 
   function downloadTaxInvoiceCopies(record: SalesDocument) {
-    window.open(`/api${apiPath}/${record.id}/pdf?copies=2`, "_blank");
+    pdf.view(pdfTarget(record, "?copies=2"));
   }
 
   const columns: ColumnsType<SalesDocument> = [
@@ -618,7 +622,7 @@ export function SalesDocumentPage({
     {
       title: "Actions",
       key: "actions",
-      width: 190,
+      width: 250,
       render: (_, record) => (
         <Space size="small">
           {canEdit ? (
@@ -626,7 +630,9 @@ export function SalesDocumentPage({
           ) : (
             <Button size="small" icon={<EditOutlined />} disabled title="View only" />
           )}
-          <Button size="small" icon={<FilePdfOutlined />} onClick={() => downloadPdf(record)} />
+          <Button size="small" icon={<FilePdfOutlined />} title="View PDF" onClick={() => pdf.view(pdfTarget(record))} />
+          <Button size="small" icon={<DownloadOutlined />} title="Download PDF" onClick={() => pdf.download(pdfTarget(record))} />
+          <Button size="small" icon={<ShareAltOutlined />} title="Share PDF" onClick={() => pdf.share(pdfTarget(record))} />
           {canCreate && availableConvertTargets.length > 0 && record.status === "accepted" && (
             <Dropdown
               menu={{
@@ -750,6 +756,8 @@ export function SalesDocumentPage({
           )}
         </Space>
       </Space>
+
+      {pdf.viewer}
 
       <Table
         rowKey="id"
