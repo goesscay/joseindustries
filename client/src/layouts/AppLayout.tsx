@@ -184,7 +184,7 @@ export function AppLayout() {
               label: "Reports",
               children: [
                 { key: "/reports/sales", icon: <LineChartOutlined />, label: comingSoonLabel("Sales Reports"), disabled: true },
-                { key: "/reports/purchases", icon: <PieChartOutlined />, label: comingSoonLabel("Purchase Reports"), disabled: true },
+                { key: "/reports/purchases", icon: <PieChartOutlined />, label: "Purchase Reports" },
                 { key: "/reports/expenses", icon: <AccountBookOutlined />, label: comingSoonLabel("Expense Reports"), disabled: true },
                 { key: "/reports/receivables", icon: <WalletOutlined />, label: comingSoonLabel("Receivables"), disabled: true },
                 { key: "/reports/payables", icon: <MoneyCollectOutlined />, label: comingSoonLabel("Payables"), disabled: true },

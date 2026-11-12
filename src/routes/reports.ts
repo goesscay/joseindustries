@@ -5,10 +5,12 @@ import { requireModuleAccess } from "../utils/permissions";
 import { asyncHandler } from "../utils/asyncHandler";
 import { getPartyLedgerReport, PartyLedgerError } from "../services/partyLedger";
 import { streamPartyLedgerPdf } from "../services/pdf/partyLedgerPdf";
+import { purchaseReportsRouter } from "./purchaseReports";
 
 export const reportsRouter = Router();
 // Every route here is a read - one router-level gate covers all of them.
 reportsRouter.use(requireAuth, requireModuleAccess("reports.reports", "view"));
+reportsRouter.use("/purchases", purchaseReportsRouter);
 
 function dateRange(query: any): { from: string; to: string } {
   const to = typeof query.to === "string" && query.to ? query.to : new Date().toISOString().slice(0, 10);

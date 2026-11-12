@@ -29,6 +29,7 @@ import { JournalEntriesPage } from "./pages/JournalEntriesPage";
 import { FixedAssetsPage } from "./pages/FixedAssetsPage";
 import { YearEndClosingPage } from "./pages/YearEndClosingPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { PurchaseReportsPage } from "./pages/PurchaseReportsPage";
 import { GstReturnsPage } from "./pages/GstReturnsPage";
 import { StockLevelsPage, StockLedgerPage, OpeningStockPage, StockAdjustmentsPage, InventoryValuationPage } from "./pages/InventoryPage";
 import { TaxRatesPage } from "./pages/TaxRatesPage";
@@ -163,6 +164,7 @@ function App() {
             }
           />
           <Route path="/reports" element={<ModuleGate module="reports.reports"><ReportsPage /></ModuleGate>} />
+          <Route path="/reports/purchases" element={<ModuleGate module="reports.reports"><PurchaseReportsPage /></ModuleGate>} />
           <Route path="/reports/gst-returns" element={<ModuleGate module="reports.reports"><GstReturnsPage /></ModuleGate>} />
           <Route path="/reports/inventory" element={<ModuleGate module="inventory.stock"><InventoryValuationPage /></ModuleGate>} />
           <Route path="/settings/tax-rates" element={<ModuleGate module="settings.tax_gst"><TaxRatesPage /></ModuleGate>} />

@@ -37,6 +37,21 @@ function stateCodeFromGstin(gstin: string | null | undefined): string | null {
   return code && /^\d{2}$/.test(code) ? code : null;
 }
 
+/** Inter-state (IGST) or intra-state (CGST+SGST)? GSTIN state codes decide it
+ * when both parties have one; otherwise the free-text state names are compared. */
+export function isInterStateSupply(
+  companyState: string | null,
+  partyState: string | null,
+  companyGstin?: string | null,
+  partyGstin?: string | null
+): boolean {
+  const companyCode = stateCodeFromGstin(companyGstin);
+  const partyCode = stateCodeFromGstin(partyGstin);
+  return companyCode && partyCode
+    ? companyCode !== partyCode
+    : !!companyState && !!partyState && normalizeState(companyState) !== normalizeState(partyState);
+}
+
 export function computeGstSplit(
   lines: GstLine[],
   companyState: string | null,
@@ -52,12 +67,7 @@ export function computeGstSplit(
   // misspelled the way the free-text `state` field can. Only an
   // unregistered/consumer customer (no GSTIN) falls back to comparing the
   // free-text state names.
-  const companyCode = stateCodeFromGstin(companyGstin);
-  const customerCode = stateCodeFromGstin(customerGstin);
-  const isInterState =
-    companyCode && customerCode
-      ? companyCode !== customerCode
-      : !!companyState && !!customerState && normalizeState(companyState) !== normalizeState(customerState);
+  const isInterState = isInterStateSupply(companyState, customerState, companyGstin, customerGstin);
 
   let taxTotal = 0;
   for (const line of lines) {
