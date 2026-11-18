@@ -346,6 +346,10 @@ export function streamClassicGstDocumentPdf(
     });
   }
 
+  // The invoice's quantity column is headed "Qty", or "Sqft/kg" when the lines
+  // were entered by area / weight (chosen in the Qty column heading of the form).
+  const qtyHeading = items.some((i) => i.unit === "sqft/kg") ? "Sqft/kg" : "Qty";
+
   function drawTableHeader() {
     const h = ITEM_HEADER_H;
     rect(CONTENT_LEFT, state.y, TABLE_RIGHT - CONTENT_LEFT, h);
@@ -355,7 +359,7 @@ export function streamClassicGstDocumentPdf(
     text("Description of Goods", COLS.desc.x + 4, midY, { width: COLS.desc.width - 8, align: "center", bold: true, size: 7.5 });
     text("HSN/SAC", COLS.hsn.x, midY, { width: COLS.hsn.width, align: "center", bold: true, size: 7.5 });
     text("GST Rate", COLS.gst.x, midY, { width: COLS.gst.width, align: "center", bold: true, size: 7.5 });
-    text("Qty", COLS.qty.x, midY, { width: COLS.qty.width, align: "center", bold: true, size: 7.5 });
+    text(qtyHeading, COLS.qty.x, midY, { width: COLS.qty.width, align: "center", bold: true, size: 7.5 });
     text("Rate", COLS.rate.x, midY, { width: COLS.rate.width, align: "center", bold: true, size: 7.5 });
     text("Amount", COLS.amount.x, midY, { width: COLS.amount.width, align: "center", bold: true, size: 7.5 });
     state.y += h;
@@ -438,7 +442,7 @@ export function streamClassicGstDocumentPdf(
       text(item.description, COLS.desc.x + 4, ty, { width: COLS.desc.width - 8 });
       text(item.hsn_code || "-", COLS.hsn.x, ty, { width: COLS.hsn.width, align: "center" });
       text(`${Number(item.tax_rate)}%`, COLS.gst.x, ty, { width: COLS.gst.width, align: "center" });
-      text(item.unit && item.unit !== "pcs" ? `${item.qty} ${item.unit}` : `${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
+      text(`${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
       text(formatMoney(item.rate), COLS.rate.x, ty, { width: COLS.rate.width - 4, align: "right" });
       // The sample's single "Amount" column is the line's pre-tax taxable
       // value (qty*rate less this line's own discount) - NOT item.line_total,

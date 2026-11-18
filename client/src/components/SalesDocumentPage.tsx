@@ -168,19 +168,13 @@ function ExpandingTextArea({
   );
 }
 
-/** What a line's quantity counts: plain pieces ("Qty") or an area / weight
- * ("Sqft/kg"). Stored as the line's unit ("pcs" / "sqft/kg"). A catalog item
- * may carry some other free-text unit, so whatever the line already has is
- * always offered too. */
+/** What the Qty column counts: plain pieces ("Qty") or an area / weight
+ * ("Sqft/kg"). Picked once in the column heading; stored on every line as its
+ * unit ("pcs" / "sqft/kg"). */
 const QTY_KIND_OPTIONS = [
   { value: "pcs", label: "Qty" },
   { value: "sqft/kg", label: "Sqft/kg" },
 ];
-function QtyKindSelect({ value, onChange }: { value?: string; onChange?: (v: string) => void }) {
-  const current = value || "pcs";
-  const options = QTY_KIND_OPTIONS.some((o) => o.value === current) ? QTY_KIND_OPTIONS : [...QTY_KIND_OPTIONS, { value: current, label: current }];
-  return <Select size="small" style={{ width: "50%" }} value={current} onChange={onChange} options={options} popupMatchSelectWidth={false} />;
-}
 
 export function SalesDocumentPage({
   apiPath,
@@ -227,6 +221,19 @@ export function SalesDocumentPage({
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const lineItems = Form.useWatch("items", form) as DocumentLineItem[] | undefined;
+  // The Qty column heading is a Qty / Sqft-kg dropdown; it reads "Sqft/kg" when
+  // any billed line is stored that way.
+  const qtyKind = (lineItems || []).some((l) => l.line_kind !== "heading" && l.unit === "sqft/kg") ? "sqft/kg" : "pcs";
+  function setQtyKind(kind: string) {
+    const current: DocumentLineItem[] = form.getFieldValue("items") || [];
+    form.setFieldsValue({
+      items: current.map((l) => {
+        // Group headings carry no quantity; measured lines (height x length) are always sq.ft.
+        const measuredLine = (Number(l.height) || 0) > 0 && (Number(l.length) || 0) > 0;
+        return l.line_kind === "heading" || measuredLine ? l : { ...l, unit: kind };
+      }),
+    });
+  }
   const freightWatch = Form.useWatch("freight_charges", form) as number | undefined;
   const installationWatch = Form.useWatch("installation_charges", form) as number | undefined;
   const companyWatch = Form.useWatch("company_id", form) as number | undefined;
@@ -489,7 +496,6 @@ export function SalesDocumentPage({
       item_id: item.id,
       description: item.name,
       hsn_code: item.hsn_code,
-      unit: item.unit,
       rate: Number(item.default_rate),
       tax_rate: nonGst ? 0 : Number(item.tax_rate),
     };
@@ -1133,7 +1139,21 @@ export function SalesDocumentPage({
                         {measuredMode && <th style={{ width: 70 }}>Height</th>}
                         {measuredMode && <th style={{ width: 70 }}>Length</th>}
                         {measuredMode && <th style={{ width: 60 }}>Pieces</th>}
-                        <th style={{ width: 150 }}>{measuredMode ? "Qty / Area" : "Qty"}</th>
+                        <th style={{ width: 96 }}>
+                          {measuredMode ? (
+                            "Qty / Area"
+                          ) : (
+                            <Select
+                              size="small"
+                              variant="borderless"
+                              value={qtyKind}
+                              onChange={setQtyKind}
+                              options={QTY_KIND_OPTIONS}
+                              popupMatchSelectWidth={false}
+                              style={{ marginLeft: -7, fontSize: 12, fontWeight: 600 }}
+                            />
+                          )}
+                        </th>
                         <th style={{ width: 90 }}>Rate</th>
                         <th style={{ width: 65 }}>Disc %</th>
                         <th style={{ width: 70 }}>Tax %</th>
@@ -1231,14 +1251,9 @@ export function SalesDocumentPage({
                                 // Height x Length x Pieces is the billed quantity (sq.ft) - shown, not typed.
                                 <span style={{ whiteSpace: "nowrap" }}>{effectiveQty(line).toString()} sq.ft</span>
                               ) : (
-                                <Space.Compact size="small" style={{ width: "100%" }}>
-                                  <Form.Item name={[name, "qty"]} noStyle>
-                                    <InputNumber size="small" min={0.01} style={{ width: "50%" }} />
-                                  </Form.Item>
-                                  <Form.Item name={[name, "unit"]} noStyle>
-                                    <QtyKindSelect />
-                                  </Form.Item>
-                                </Space.Compact>
+                                <Form.Item name={[name, "qty"]} style={{ marginBottom: 0 }}>
+                                  <InputNumber size="small" min={0.01} style={{ width: "100%" }} />
+                                </Form.Item>
                               )}
                             </td>
                             <td>
@@ -1278,13 +1293,10 @@ export function SalesDocumentPage({
                               <Form.Item name={[name, "item_id"]} noStyle>
                                 <Input />
                               </Form.Item>
-                              {/* The quantity's kind (Qty / Sqft-kg) is picked in the Qty cell; where
-                                  that picker is not shown (headings, measured lines) the stored value rides along. */}
-                              {(isHeading || (measuredMode && hasDims)) && (
-                                <Form.Item name={[name, "unit"]} noStyle>
-                                  <Input />
-                                </Form.Item>
-                              )}
+                              {/* The Qty / Sqft-kg choice is made in the column heading and stored here. */}
+                              <Form.Item name={[name, "unit"]} noStyle>
+                                <Input />
+                              </Form.Item>
                               {/* Outside measured mode these still ride along, so an edited or
                                   converted document does not lose its measured data. */}
                               {!measuredMode && (
@@ -1321,7 +1333,7 @@ export function SalesDocumentPage({
                       description: "",
                       hsn_code: "",
                       qty: 1,
-                      unit: "pcs",
+                      unit: qtyKind,
                       rate: 0,
                       discount_percent: 0,
                       tax_rate: nonGst ? 0 : 18,
