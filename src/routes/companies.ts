@@ -26,7 +26,7 @@ async function findCompanyById(id: number): Promise<Company | undefined> {
 companiesRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
-    const [rows] = await pool.query<any[]>("SELECT * FROM companies ORDER BY name ASC");
+    const [rows] = await pool.query<any[]>("SELECT * FROM companies ORDER BY (code = 'JI') DESC, name ASC");
     res.json({ data: rows as Company[] });
   })
 );
