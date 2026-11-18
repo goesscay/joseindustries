@@ -129,6 +129,32 @@ function effectiveQty(line: DocumentLineItem | undefined): number {
   return Number(line.qty) || 0;
 }
 
+/** Line-item description: one line while idle, grows to show the whole text
+ * when focused (and keeps growing as you type). Works as a Form.Item child. */
+function ExpandingTextArea({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value?: string;
+  onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  placeholder?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <Input.TextArea
+      size="small"
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      autoSize={focused ? { minRows: 4, maxRows: 14 } : { minRows: 1, maxRows: 1 }}
+      style={{ minWidth: 220 }}
+    />
+  );
+}
+
 export function SalesDocumentPage({
   apiPath,
   title,
@@ -1075,7 +1101,7 @@ export function SalesDocumentPage({
                       <tr style={{ textAlign: "left", fontSize: 12, color: "#888" }}>
                         {measuredMode && <th style={{ width: 92 }}>Row type</th>}
                         <th style={{ minWidth: 150 }}>Item</th>
-                        <th style={{ minWidth: 150 }}>Description</th>
+                        <th style={{ minWidth: 220 }}>Description</th>
                         <th style={{ width: 90 }}>HSN/SAC</th>
                         {measuredMode && <th style={{ width: 70 }}>Height</th>}
                         {measuredMode && <th style={{ width: 70 }}>Length</th>}
@@ -1138,7 +1164,7 @@ export function SalesDocumentPage({
                                 rules={[{ required: true, message: "Required" }]}
                                 style={{ marginBottom: 0 }}
                               >
-                                <Input size="small" placeholder={isHeading ? "Group heading (e.g. Room 2)" : "Description"} />
+                                <ExpandingTextArea placeholder={isHeading ? "Group heading (e.g. Room 2)" : "Description"} />
                               </Form.Item>
                             </td>
                             <td>
