@@ -63,7 +63,7 @@ const HSN_ROW_H = 15.2;
 const DECL_BANK_H = 56.8;
 // The sample reserves 91.1pt for the signature area; trimmed to pay for the
 // letterhead now sitting above the invoice.
-const SIGNATURE_H = 80;
+const SIGNATURE_H = 58;
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return "";
@@ -486,7 +486,7 @@ export function streamClassicGstDocumentPdf(
   let avail = BOTTOM_LIMIT - state.y;
   for (;;) {
     const rowsH = itemRowHeights.slice(from).reduce((a, b) => a + b, 0);
-    const needed = Math.max(ITEM_BODY_MIN_H, rowsH + summaryBlockH + 20);
+    const needed = Math.max(ITEM_BODY_MIN_H, rowsH + summaryBlockH + 8);
     if (needed + belowBodyH <= avail + 0.5) {
       const bodyH = avail - belowBodyH;
       const bodyTop = state.y;
