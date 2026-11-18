@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Modal, Space, Spin, message } from "antd";
-import { DownloadOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { DownloadOutlined, PrinterOutlined, ShareAltOutlined } from "@ant-design/icons";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import workerSrc from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 
@@ -41,6 +41,32 @@ function saveBlob(blob: Blob, filename: string) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(href), 10_000);
+}
+
+/** Sends the PDF to the printer: loads it into a hidden iframe and opens the
+ * browser's print dialog (the real document is printed, not the canvas
+ * preview). If the browser blocks that, the PDF opens in a new tab instead,
+ * where its own print button works. */
+function printPdf(blob: Blob) {
+  const href = URL.createObjectURL(blob);
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  const cleanup = () => {
+    frame.remove();
+    URL.revokeObjectURL(href);
+  };
+  frame.onload = () => {
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      setTimeout(cleanup, 60_000);
+    } catch {
+      cleanup();
+      window.open(URL.createObjectURL(blob), "_blank");
+    }
+  };
+  frame.src = href;
+  document.body.appendChild(frame);
 }
 
 /** Opens the phone/OS share sheet with the PDF attached. Where the browser
@@ -161,6 +187,9 @@ function PdfViewerModal({ target, onClose }: { target: PdfTarget | null; onClose
       destroyOnClose
       footer={
         <Space>
+          <Button icon={<PrinterOutlined />} disabled={!blob} onClick={() => blob && printPdf(blob)}>
+            Print
+          </Button>
           <Button icon={<DownloadOutlined />} disabled={!blob} onClick={() => target && blob && saveBlob(blob, target.filename)}>
             Download
           </Button>
