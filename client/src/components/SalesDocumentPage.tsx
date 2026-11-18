@@ -129,6 +129,45 @@ function effectiveQty(line: DocumentLineItem | undefined): number {
   return Number(line.qty) || 0;
 }
 
+/** Sizes a textarea to its content (at least ~4 lines, at most ~14). */
+function growTextArea(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${Math.min(Math.max(el.scrollHeight, 96), 320)}px`;
+}
+
+/** Line-item description: one line while idle, expands to show the whole text
+ * when clicked into (and keeps growing as you type). Works as a Form.Item
+ * child. The height is set on the element directly because antd's `autoSize`
+ * ignores a change of its min/max rows until the text itself changes. */
+function ExpandingTextArea({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value?: string;
+  onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  placeholder?: string;
+}) {
+  return (
+    <Input.TextArea
+      size="small"
+      rows={1}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => {
+        onChange?.(e);
+        growTextArea(e.target);
+      }}
+      onFocus={(e) => growTextArea(e.target)}
+      onBlur={(e) => {
+        e.target.style.height = "";
+        e.target.scrollTop = 0;
+      }}
+      style={{ minWidth: 220, resize: "none" }}
+    />
+  );
+}
+
 export function SalesDocumentPage({
   apiPath,
   title,
@@ -1075,7 +1114,7 @@ export function SalesDocumentPage({
                       <tr style={{ textAlign: "left", fontSize: 12, color: "#888" }}>
                         {measuredMode && <th style={{ width: 92 }}>Row type</th>}
                         <th style={{ minWidth: 150 }}>Item</th>
-                        <th style={{ minWidth: 150 }}>Description</th>
+                        <th style={{ minWidth: 220 }}>Description</th>
                         <th style={{ width: 90 }}>HSN/SAC</th>
                         {measuredMode && <th style={{ width: 70 }}>Height</th>}
                         {measuredMode && <th style={{ width: 70 }}>Length</th>}
@@ -1138,7 +1177,7 @@ export function SalesDocumentPage({
                                 rules={[{ required: true, message: "Required" }]}
                                 style={{ marginBottom: 0 }}
                               >
-                                <Input size="small" placeholder={isHeading ? "Group heading (e.g. Room 2)" : "Description"} />
+                                <ExpandingTextArea placeholder={isHeading ? "Group heading (e.g. Room 2)" : "Description"} />
                               </Form.Item>
                             </td>
                             <td>
