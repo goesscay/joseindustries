@@ -438,7 +438,7 @@ export function streamClassicGstDocumentPdf(
       text(item.description, COLS.desc.x + 4, ty, { width: COLS.desc.width - 8 });
       text(item.hsn_code || "-", COLS.hsn.x, ty, { width: COLS.hsn.width, align: "center" });
       text(`${Number(item.tax_rate)}%`, COLS.gst.x, ty, { width: COLS.gst.width, align: "center" });
-      text(`${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
+      text(item.unit && item.unit !== "pcs" ? `${item.qty} ${item.unit}` : `${item.qty}`, COLS.qty.x, ty, { width: COLS.qty.width, align: "center" });
       text(formatMoney(item.rate), COLS.rate.x, ty, { width: COLS.rate.width - 4, align: "right" });
       // The sample's single "Amount" column is the line's pre-tax taxable
       // value (qty*rate less this line's own discount) - NOT item.line_total,

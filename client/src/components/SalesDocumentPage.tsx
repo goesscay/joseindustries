@@ -168,6 +168,20 @@ function ExpandingTextArea({
   );
 }
 
+/** What a line's quantity counts: plain pieces ("Qty") or an area / weight
+ * ("Sqft/kg"). Stored as the line's unit ("pcs" / "sqft/kg"). A catalog item
+ * may carry some other free-text unit, so whatever the line already has is
+ * always offered too. */
+const QTY_KIND_OPTIONS = [
+  { value: "pcs", label: "Qty" },
+  { value: "sqft/kg", label: "Sqft/kg" },
+];
+function QtyKindSelect({ value, onChange }: { value?: string; onChange?: (v: string) => void }) {
+  const current = value || "pcs";
+  const options = QTY_KIND_OPTIONS.some((o) => o.value === current) ? QTY_KIND_OPTIONS : [...QTY_KIND_OPTIONS, { value: current, label: current }];
+  return <Select size="small" style={{ width: "50%" }} value={current} onChange={onChange} options={options} popupMatchSelectWidth={false} />;
+}
+
 export function SalesDocumentPage({
   apiPath,
   title,
@@ -1119,7 +1133,7 @@ export function SalesDocumentPage({
                         {measuredMode && <th style={{ width: 70 }}>Height</th>}
                         {measuredMode && <th style={{ width: 70 }}>Length</th>}
                         {measuredMode && <th style={{ width: 60 }}>Pieces</th>}
-                        <th style={{ width: 80 }}>{measuredMode ? "Qty / Area" : "Qty"}</th>
+                        <th style={{ width: 150 }}>{measuredMode ? "Qty / Area" : "Qty"}</th>
                         <th style={{ width: 90 }}>Rate</th>
                         <th style={{ width: 65 }}>Disc %</th>
                         <th style={{ width: 70 }}>Tax %</th>
@@ -1217,9 +1231,14 @@ export function SalesDocumentPage({
                                 // Height x Length x Pieces is the billed quantity (sq.ft) - shown, not typed.
                                 <span style={{ whiteSpace: "nowrap" }}>{effectiveQty(line).toString()} sq.ft</span>
                               ) : (
-                                <Form.Item name={[name, "qty"]} style={{ marginBottom: 0 }}>
-                                  <InputNumber size="small" min={0.01} style={{ width: "100%" }} />
-                                </Form.Item>
+                                <Space.Compact size="small" style={{ width: "100%" }}>
+                                  <Form.Item name={[name, "qty"]} noStyle>
+                                    <InputNumber size="small" min={0.01} style={{ width: "50%" }} />
+                                  </Form.Item>
+                                  <Form.Item name={[name, "unit"]} noStyle>
+                                    <QtyKindSelect />
+                                  </Form.Item>
+                                </Space.Compact>
                               )}
                             </td>
                             <td>
@@ -1259,9 +1278,13 @@ export function SalesDocumentPage({
                               <Form.Item name={[name, "item_id"]} noStyle>
                                 <Input />
                               </Form.Item>
-                              <Form.Item name={[name, "unit"]} noStyle>
-                                <Input />
-                              </Form.Item>
+                              {/* The quantity's kind (Qty / Sqft-kg) is picked in the Qty cell; where
+                                  that picker is not shown (headings, measured lines) the stored value rides along. */}
+                              {(isHeading || (measuredMode && hasDims)) && (
+                                <Form.Item name={[name, "unit"]} noStyle>
+                                  <Input />
+                                </Form.Item>
+                              )}
                               {/* Outside measured mode these still ride along, so an edited or
                                   converted document does not lose its measured data. */}
                               {!measuredMode && (
