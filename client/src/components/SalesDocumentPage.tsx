@@ -129,8 +129,16 @@ function effectiveQty(line: DocumentLineItem | undefined): number {
   return Number(line.qty) || 0;
 }
 
-/** Line-item description: one line while idle, grows to show the whole text
- * when focused (and keeps growing as you type). Works as a Form.Item child. */
+/** Sizes a textarea to its content (at least ~4 lines, at most ~14). */
+function growTextArea(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${Math.min(Math.max(el.scrollHeight, 96), 320)}px`;
+}
+
+/** Line-item description: one line while idle, expands to show the whole text
+ * when clicked into (and keeps growing as you type). Works as a Form.Item
+ * child. The height is set on the element directly because antd's `autoSize`
+ * ignores a change of its min/max rows until the text itself changes. */
 function ExpandingTextArea({
   value,
   onChange,
@@ -140,17 +148,22 @@ function ExpandingTextArea({
   onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   placeholder?: string;
 }) {
-  const [focused, setFocused] = useState(false);
   return (
     <Input.TextArea
       size="small"
+      rows={1}
       value={value}
-      onChange={onChange}
       placeholder={placeholder}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      autoSize={focused ? { minRows: 4, maxRows: 14 } : { minRows: 1, maxRows: 1 }}
-      style={{ minWidth: 220 }}
+      onChange={(e) => {
+        onChange?.(e);
+        growTextArea(e.target);
+      }}
+      onFocus={(e) => growTextArea(e.target)}
+      onBlur={(e) => {
+        e.target.style.height = "";
+        e.target.scrollTop = 0;
+      }}
+      style={{ minWidth: 220, resize: "none" }}
     />
   );
 }
