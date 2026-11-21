@@ -98,7 +98,7 @@ function hasValue(v: unknown): boolean {
 /** Rows of the Terms & Condition table. `label` null = a free-text line that
  * spans the whole row. Order and labels follow the sheets; a row is only
  * printed when there is something to say (GST always is). */
-function buildTermsRows(document: DocumentRecord, company: Company, items: DocumentItem[]): { label: string | null; value: string }[] {
+function buildTermsRows(document: DocumentRecord, company: Company): { label: string | null; value: string }[] {
   const text = (document.terms_and_conditions || company.terms_and_conditions || "").trim();
   const parsed = text
     .split("\n")
@@ -118,14 +118,10 @@ function buildTermsRows(document: DocumentRecord, company: Company, items: Docum
     return hit.value;
   };
 
-  const rates = Array.from(new Set(items.filter((i) => i.line_kind !== "heading").map((i) => Number(i.tax_rate)).filter((r) => r > 0))).sort((a, b) => a - b);
-  const gst = rates.length ? `${rates.join("% / ")}% GST Extra` : "Not applicable";
-
   const rows: { label: string | null; value: string }[] = [
     { label: "Offer Valid", value: fromText(/valid/i) },
     { label: "Payment Terms :", value: document.mode_terms_of_payment || document.credit_period || fromText(/payment/i) },
     { label: "Delivery Period:", value: document.terms_of_delivery || fromText(/deliver/i) },
-    { label: "GST:", value: gst },
     { label: "Packing and forwarding:", value: fromText(/packing|forward/i) },
   ].filter((r) => r.value);
 
@@ -392,7 +388,7 @@ function streamSheetPdf(
   totalLines.push({ label: "Grand Total", value: formatMoney(grandTotal), bold: true });
   const totalsH = totalLines.length * TOTAL_ROW_H;
 
-  const termsRows = buildTermsRows(document, company, items);
+  const termsRows = buildTermsRows(document, company);
   const termValueW = CONTENT_WIDTH - TERMS_LABEL_W - 16;
   const termRowHeights = termsRows.map((r) =>
     Math.max(
