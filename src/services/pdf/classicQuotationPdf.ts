@@ -65,11 +65,11 @@ function buildCols(variant: SheetVariant): Record<string, Col> {
 // Section heights measured off the sheets.
 const INFO_MIN_H = 82.7;
 const ITEMS_HEADER_H = 26.6;
-const TOTAL_ROW_H = 15;
+const TOTAL_ROW_H = 14;
 const TERMS_TITLE_H = 18;
-const TERM_ROW_MIN_H = 20;
-const DECL_BANK_MIN_H = 66;
-const SIGNATURE_H = 84;
+const TERM_ROW_MIN_H = 16;
+const DECL_BANK_MIN_H = 56;
+const SIGNATURE_H = 62;
 const TERMS_LABEL_W = (104.5 * CONTENT_WIDTH) / 541;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -397,9 +397,9 @@ function streamSheetPdf(
   const termRowHeights = termsRows.map((r) =>
     Math.max(
       TERM_ROW_MIN_H,
-      measure(r.value, r.label ? termValueW : CONTENT_WIDTH - 16, 9.5) + 10,
+      measure(r.value, r.label ? termValueW : CONTENT_WIDTH - 16, 9.5) + 6,
       // A long label wraps inside its narrow column and needs the room too.
-      r.label ? measure(r.label, TERMS_LABEL_W - 8, 9.5, true) + 10 : 0
+      r.label ? measure(r.label, TERMS_LABEL_W - 8, 9.5, true) + 6 : 0
     )
   );
   const termsH = TERMS_TITLE_H + termRowHeights.reduce((a, b) => a + b, 0);
@@ -419,7 +419,11 @@ function streamSheetPdf(
   const signatureH = template.showSignatureBlock ? SIGNATURE_H : 0;
   const footerH = totalsH + termsH + declBankH + signatureH;
 
-  function drawFooter(top: number) {
+  // The footer is two blocks: the totals (Total / GST / Grand Total), then the
+  // terms, declaration and signature. They normally sit together under the
+  // items, but when both do not fit on the items' page the totals stay with
+  // the items and only the terms onward move to the next page.
+  function drawTotals(top: number) {
     let y = top;
 
     // Totals: label under the Rate column, value under Amount; the wide blank
@@ -433,6 +437,11 @@ function streamSheetPdf(
       y += TOTAL_ROW_H;
     });
     hLine(CONTENT_LEFT, TOTALS_LABEL_X, y);
+    return y;
+  }
+
+  function drawTermsAndBelow(top: number) {
+    let y = top;
 
     // Terms & Condition
     rect(CONTENT_LEFT, y, CONTENT_WIDTH, TERMS_TITLE_H);
@@ -486,6 +495,10 @@ function streamSheetPdf(
     return y;
   }
 
+  function drawFooter(top: number) {
+    return drawTermsAndBelow(drawTotals(top));
+  }
+
   // ============================================================
   // Layout: letterhead, info, then the items table paginated so the last page
   // always ends with the footer sections flush to the bottom.
@@ -512,7 +525,18 @@ function streamSheetPdf(
       drawFooter(state.y + bodyH);
       break;
     }
-    // All rows fit on this page but the footer sections do not: keep the rows
+    // The rows and the totals fit here but the terms / declaration / signature
+    // do not: keep the GST figures with the items and continue on the next page.
+    if (remaining + MIN_GAP + totalsH <= avail) {
+      const bodyH = avail - totalsH;
+      drawBodyBox(state.y, bodyH);
+      drawItemRows(idx, items.length, state.y);
+      drawTotals(state.y + bodyH);
+      newPageWithHeader();
+      drawTermsAndBelow(state.y);
+      break;
+    }
+    // All rows fit on this page but the totals do not: keep the rows
     // together here and start the footer on the next page, rather than
     // dragging one lonely row over to a page that is otherwise empty.
     if (remaining <= avail) {
