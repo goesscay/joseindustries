@@ -945,6 +945,9 @@ export function SalesDocumentPage({
             )}
           </Row>
 
+          {/* forceRender: every panel's fields must exist even while collapsed - antd only
+              submits mounted fields, so the pre-filled Terms & Conditions (and charges) were
+              silently dropped unless the panel had been opened. */}
           <Collapse
             ghost
             size="small"
@@ -952,6 +955,7 @@ export function SalesDocumentPage({
             items={[
               {
                 key: "consignee",
+                forceRender: true,
                 label: "Shipping / Consignee (optional, if different from buyer)",
                 children: (
                   <Row gutter={12}>
@@ -980,6 +984,7 @@ export function SalesDocumentPage({
               },
               {
                 key: "references",
+                forceRender: true,
                 label: "References & Transport (optional)",
                 children: (
                   <Row gutter={12}>
@@ -1067,6 +1072,7 @@ export function SalesDocumentPage({
               },
               {
                 key: "charges",
+                forceRender: true,
                 label: "Invoice Terms & Charges (due date, credit period, freight, installation)",
                 children: (
                   <Row gutter={12}>
@@ -1100,6 +1106,7 @@ export function SalesDocumentPage({
               },
               {
                 key: "terms",
+                forceRender: true,
                 label: "Terms & Conditions (optional)",
                 children: (
                   <>
